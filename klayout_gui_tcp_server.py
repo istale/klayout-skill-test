@@ -461,6 +461,105 @@ def _m_instance_create(_id, params):
     )
 
 
+def _m_instance_array_create(_id, params):
+    """需求3-3: create a regular array of instances.
+
+    Params:
+      cell: parent cell name (default TOP)
+      child_cell: instantiated cell name (required)
+      trans: {x,y,rot,mirror} for the first instance (DBU, degrees)
+      array: {nx,ny,dx,dy} (DBU)
+    """
+    err = _require_active_layout_str(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    cell_name = params.get("cell", "TOP")
+    if not isinstance(cell_name, str) or not cell_name:
+        return _err(_id, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+
+    child_name = params.get("child_cell", None)
+    if not isinstance(child_name, str) or not child_name:
+        return _err(_id, "Invalid params: child_cell must be a non-empty string", "InvalidParams", {"field": "child_cell"})
+
+    if not _STATE.layout.has_cell(cell_name):
+        return _err(_id, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
+
+    if not _STATE.layout.has_cell(child_name):
+        return _err(_id, f"Child cell not found: {child_name}", "ChildCellNotFound", {"name": child_name})
+
+    trans = params.get("trans", {})
+    if trans is None:
+        trans = {}
+    if not isinstance(trans, dict):
+        return _err(_id, "Invalid params: trans must be an object", "InvalidParams", {"field": "trans"})
+
+    x = trans.get("x", 0)
+    y = trans.get("y", 0)
+    rot = trans.get("rot", 0)
+    mirror = trans.get("mirror", False)
+
+    if not isinstance(x, int) or not isinstance(y, int):
+        return _err(_id, "Invalid params: trans.x and trans.y must be int (DBU)", "InvalidParams", {"field": "trans"})
+
+    if not isinstance(rot, int):
+        return _err(_id, "Invalid params: trans.rot must be int degrees (0/90/180/270)", "InvalidParams", {"field": "trans.rot"})
+
+    if rot not in (0, 90, 180, 270):
+        return _err(
+            _id,
+            f"Invalid params: rot must be one of 0,90,180,270 (got {rot})",
+            "InvalidParams",
+            {"field": "trans.rot", "allowed": [0, 90, 180, 270], "got": rot},
+        )
+
+    if not isinstance(mirror, bool):
+        return _err(_id, "Invalid params: trans.mirror must be boolean", "InvalidParams", {"field": "trans.mirror"})
+
+    arr = params.get("array", None)
+    if not isinstance(arr, dict):
+        return _err(_id, "Invalid params: array must be an object", "InvalidParams", {"field": "array"})
+
+    nx = arr.get("nx", None)
+    ny = arr.get("ny", None)
+    dx = arr.get("dx", None)
+    dy = arr.get("dy", None)
+
+    if not isinstance(nx, int) or nx < 1:
+        return _err(_id, "Invalid params: nx must be int >= 1", "InvalidParams", {"field": "array.nx", "got": nx})
+    if not isinstance(ny, int) or ny < 1:
+        return _err(_id, "Invalid params: ny must be int >= 1", "InvalidParams", {"field": "array.ny", "got": ny})
+    if not isinstance(dx, int) or not isinstance(dy, int):
+        return _err(_id, "Invalid params: dx and dy must be int (DBU)", "InvalidParams", {"field": "array"})
+
+    rot_quadrants = rot // 90
+    t = pya.Trans(rot_quadrants, mirror, x, y)
+
+    parent_cell = _STATE.layout.cell(cell_name)
+    child_cell = _STATE.layout.cell(child_name)
+
+    a = pya.Vector(dx, 0)
+    b = pya.Vector(0, dy)
+
+    cia = pya.CellInstArray(child_cell, t, a, b, nx, ny)
+    parent_cell.insert(cia)
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "inserted": True,
+            "cell": cell_name,
+            "child_cell": child_name,
+            "trans": {"x": x, "y": y, "rot": rot, "mirror": mirror},
+            "array": {"nx": nx, "ny": ny, "dx": dx, "dy": dy},
+        },
+    )
+
+
 _METHODS = {
     "ping": _m_ping,
     "layout.new": _m_layout_new,
@@ -469,6 +568,7 @@ _METHODS = {
     "shape.create": _m_shape_create,
     "layout.export": _m_layout_export,
     "instance.create": _m_instance_create,
+    "instance_array.create": _m_instance_array_create,
 }
 
 
