@@ -1,35 +1,40 @@
-"""KLayout Python macro: minimal TCP server (localhost) to validate request/response.
+"""KLayout Python macro: TCP server (localhost) using JSON-RPC 2.0.
 
-Goal (需求1 / TDD step 1):
-- Start a TCP server inside KLayout's event loop.
-- Accept one client connection.
-- For each line-based request, respond.
+This macro is the server for the project.
 
-Protocol (v0):
-- Client sends:  ping\n
-- Server replies: pong\n
-Notes:
-- Server binds to localhost only (127.0.0.1).
-- Single-client only: extra connections are rejected.
-- Keep global references so Qt objects won't be GC'd.
-- Intended run modes:
-  - GUI: run from Macro IDE
-  - Headless: /home/istale/klayout-build/0.30.5-qt5/klayout -e -rm <this_file>
+Transport:
+- newline-delimited JSON (one JSON-RPC request per line)
+- newline-delimited JSON (one response per line)
+
+Single-client only.
+
+Run modes:
+- GUI: Macro IDE -> Python -> run this file
+- Headless: /home/istale/klayout-build/0.30.5-qt5/klayout -e -rm <this_file>
+
 """
 
+import json
 import os
 import pya
 
-# Keep globals to prevent garbage collection of Qt objects/callbacks
+# --- Globals (keep references to prevent GC) ---
 _SERVER = None
 _CLIENT = None          # QTcpSocket (single client)
 _CLIENT_STATE = None    # _ClientState (single client)
+
+# Server state for JSON-RPC methods (需求2)
+_STATE = {
+    "layout": None,
+    "top_cell": None,
+    "top_cell_name": None,
+    "current_layer_index": None,
+}
 
 
 def _bytes_to_py(b):
     """Best-effort convert KLayout Qt byte container to Python bytes."""
     try:
-        # QByteArray in KLayout often converts to Python bytes via bytes(...)
         return bytes(b)
     except Exception:
         try:
@@ -44,15 +49,50 @@ class _ClientState:
         self.buf = b""
 
 
-def _handle_line(sock, line_bytes):
-    """Handle a single request line (without trailing \n)."""
-    cmd = line_bytes.decode("utf-8", errors="replace").strip()
+# --- JSON-RPC helpers ---
 
-    if cmd == "ping":
-        sock.write(b"pong\n")
-        return
+def _jsonrpc_error(_id, code, message, data=None):
+    err = {"code": int(code), "message": str(message)}
+    if data is not None:
+        err["data"] = data
+    return {"jsonrpc": "2.0", "id": _id, "error": err}
 
-    sock.write(("err unknown_command: %s\n" % cmd).encode("utf-8"))
+
+def _jsonrpc_result(_id, result):
+    return {"jsonrpc": "2.0", "id": _id, "result": result}
+
+
+def _send_obj(sock, obj):
+    line = (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
+    sock.write(line)
+
+
+def _handle_request(req):
+    # Basic validation
+    if not isinstance(req, dict):
+        return _jsonrpc_error(None, -32600, "Invalid Request: request must be an object")
+
+    if req.get("jsonrpc") != "2.0":
+        return _jsonrpc_error(req.get("id", None), -32600, "Invalid Request: jsonrpc must be '2.0'")
+
+    _id = req.get("id", None)
+    method = req.get("method", None)
+    params = req.get("params", {})
+
+    if not isinstance(method, str) or not method:
+        return _jsonrpc_error(_id, -32600, "Invalid Request: method must be a non-empty string")
+
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
+
+    # --- Methods (TDD T1) ---
+    if method == "ping":
+        return _jsonrpc_result(_id, {"pong": True})
+
+    # Unknown
+    return _jsonrpc_error(_id, -32601, f"Method not found: {method}")
 
 
 def _on_client_ready_read(state):
@@ -65,8 +105,23 @@ def _on_client_ready_read(state):
     state.buf += data
 
     while b"\n" in state.buf:
-        line, state.buf = state.buf.split(b"\n", 1)
-        _handle_line(sock, line)
+        raw_line, state.buf = state.buf.split(b"\n", 1)
+        if not raw_line.strip():
+            continue
+
+        try:
+            req = json.loads(raw_line.decode("utf-8"))
+        except Exception as e:
+            # JSON parse error: provide a concrete reason
+            resp = _jsonrpc_error(None, -32700, f"Parse error: {e}")
+            _send_obj(sock, resp)
+            continue
+
+        resp = _handle_request(req)
+        # Notification: id is omitted -> no response
+        if isinstance(req, dict) and ("id" not in req):
+            continue
+        _send_obj(sock, resp)
 
 
 def _on_client_disconnected(sock):
@@ -79,7 +134,6 @@ def _on_client_disconnected(sock):
 def _on_new_connection():
     global _SERVER, _CLIENT, _CLIENT_STATE
 
-    # Single-client policy: accept only the first active client.
     while _SERVER.hasPendingConnections():
         sock = _SERVER.nextPendingConnection()
 
@@ -97,7 +151,6 @@ def _on_new_connection():
         _CLIENT = sock
         _CLIENT_STATE = _ClientState(sock)
 
-        # Bind signals (KLayout Qt binding exposes signals as assignable attributes)
         sock.readyRead = lambda st=_CLIENT_STATE: _on_client_ready_read(st)
         sock.disconnected = lambda s=sock: _on_client_disconnected(s)
 
@@ -123,13 +176,9 @@ def start_server(port=0):
     except Exception:
         mw = None
 
-    # Parent to main window in GUI; otherwise parent to app instance (headless)
     _SERVER = pya.QTcpServer(mw if mw is not None else app)
-
-    # Bind signal
     _SERVER.newConnection = _on_new_connection
 
-    # Note: listen() expects a QHostAddress object, not the SpecialAddress enum.
     addr = pya.QHostAddress.new_special(pya.QHostAddress.LocalHost)
     ok = _SERVER.listen(addr, int(port))
     if not ok:
@@ -141,7 +190,6 @@ def start_server(port=0):
         raise RuntimeError("QTcpServer.listen failed: %s" % err)
 
     actual_port = int(_SERVER.serverPort())
-
     msg = "[klayout-gui-server] listening on 127.0.0.1:%d" % actual_port
     print(msg)
     if mw is not None:
@@ -151,20 +199,6 @@ def start_server(port=0):
             pass
 
     return actual_port
-
-
-def stop_server():
-    global _SERVER, _CLIENT, _CLIENT_STATE
-    if _SERVER is None:
-        return
-    try:
-        _SERVER.close()
-    except Exception:
-        pass
-    _SERVER = None
-    _CLIENT = None
-    _CLIENT_STATE = None
-    print("[klayout-gui-server] stopped")
 
 
 # Auto-start when macro runs

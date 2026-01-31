@@ -40,11 +40,96 @@ Terminal B:
 python3 /home/istale/.openclaw/workspace/klayout_skill_test/test_client_ping.py 5055
 ```
 
-## Protocol v0
-Line-based UTF-8-ish (best effort):
-- `ping` → `pong`
-- unknown → `err unknown_command: ...`
+## Protocol v0 (JSON-RPC 2.0)
+Transport:
+- One JSON-RPC request per line (newline-delimited JSON)
+- One JSON-RPC response per line
 
 Single-client only:
 - Only one client connection is supported at a time.
 - Additional connections are rejected.
+
+### Common error codes (JSON-RPC 2.0)
+Errors must include the *real reason* (not only generic text) when the cause is determined by server logic.
+
+- `-32600` Invalid Request
+- `-32601` Method not found
+- `-32602` Invalid params
+- `-32001` No active layout (layout.new not called yet)
+- `-32002` Cell not found (requested cell name does not exist)
+- `-32003` Layer not available (no layer specified and no current layer set)
+- `-32010` Path not allowed (export path escapes server cwd)
+- `-32011` File exists (overwrite=false and file already exists)
+- `-32099` Internal error
+
+### Methods (需求2 spec v0)
+#### `layout.new`
+Create a new layout and top cell.
+
+Params (defaults shown):
+```json
+{"dbu":0.0005,"top_cell":"TOP","clear_previous":true}
+```
+
+Result:
+```json
+{"layout_id":"L1","dbu":0.0005,"top_cell":"TOP"}
+```
+
+#### `layer.new`
+Create or get a layer in the current layout.
+
+Params:
+```json
+{"layer":1,"datatype":0,"name":null,"as_current":true}
+```
+
+Result:
+```json
+{"layer_index":3,"layer":1,"datatype":0,"name":null}
+```
+
+#### `shape.create`
+Insert a shape into a cell+layer (v0 supports `box` and `polygon`).
+
+Params:
+```json
+{
+  "cell":"TOP",
+  "layer_index":null,
+  "layer":null,
+  "type":"box",
+  "coords":[0,0,1000,1000],
+  "units":"dbu"
+}
+```
+
+Behavior rules:
+- If `cell` does not exist: return `-32002` with message like `Cell not found: TOP`.
+- Layer selection priority:
+  1) `layer_index` if provided
+  2) `layer` object if provided
+  3) current layer from last `layer.new`
+  Otherwise: return `-32003` with message explaining what's missing.
+
+Result:
+```json
+{"inserted":true,"type":"box","cell":"TOP","layer_index":3}
+```
+
+#### `layout.export`
+Write current layout to a file under the server's start directory.
+
+Params:
+```json
+{"path":"out.gds","overwrite":true}
+```
+
+Behavior rules:
+- If resolved `path` escapes the server cwd: return `-32010` with message like `Path not allowed (escapes server cwd): ../out.gds`.
+- If file exists and `overwrite=false`: return `-32011` with message like `File exists and overwrite=false: out.gds`.
+
+Result:
+```json
+{"written":true,"path":"out.gds"}
+```
