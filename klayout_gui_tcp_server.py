@@ -25,7 +25,7 @@ import pya
 # Keep globals to prevent garbage collection of Qt objects/callbacks
 _SERVER = None
 _CLIENTS = []  # list[QTcpSocket]
-_EXIT_TIMER = None
+# (reserved)
 
 
 def _bytes_to_py(b):
@@ -153,23 +153,8 @@ def stop_server():
     print("[klayout-gui-server] stopped")
 
 
-def _schedule_exit(lifetime_ms: int):
-    """Exit the application after lifetime_ms (for headless test runs)."""
-    global _EXIT_TIMER
-
-    if lifetime_ms <= 0:
-        return
-
-    _EXIT_TIMER = pya.QTimer(pya.Application.instance().main_window())
-    _EXIT_TIMER.singleShot = True
-    _EXIT_TIMER.timeout = lambda: pya.Application.instance().exit(0)
-    _EXIT_TIMER.start(int(lifetime_ms))
-
-
 # Auto-start when macro runs
 _env_port = int(os.environ.get("KLAYOUT_SERVER_PORT", "0"))
-_env_life = int(os.environ.get("KLAYOUT_SERVER_LIFETIME_MS", "0"))
 
 PORT = start_server(_env_port)
 print("[klayout-gui-server] PORT=", PORT, flush=True)
-_schedule_exit(_env_life)
