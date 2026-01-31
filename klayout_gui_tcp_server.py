@@ -162,7 +162,7 @@ def _schedule_exit(lifetime_ms: int):
 
     _EXIT_TIMER = pya.QTimer(pya.Application.instance().main_window())
     _EXIT_TIMER.singleShot = True
-    _EXIT_TIMER.timeout = lambda: pya.Application.instance().exit()
+    _EXIT_TIMER.timeout = lambda: pya.Application.instance().exit(0)
     _EXIT_TIMER.start(int(lifetime_ms))
 
 
