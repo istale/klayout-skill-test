@@ -1,0 +1,6 @@
+.venv/
+klayout-python-offline-skill.tar.gz
+klayout-python/references/docs_html/
+klayout-python/references/docs_md/
+__pycache__/
+*.pyc
