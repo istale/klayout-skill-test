@@ -10,13 +10,20 @@ Headless run (pinned):
 - /home/istale/klayout-build/0.30.5-qt5/klayout -e -rm <this_file>
 
 Spec: see README.md (需求2 spec v0)
+
+Refactor note:
+- This file is organized into: transport -> JSON-RPC core -> method handlers.
+- Behavior/spec should remain unchanged; use tests to validate.
 """
 
 import json
 import os
 import pya
 
-# --- Globals (keep references to prevent GC) ---
+# -----------------------------------------------------------------------------
+# Globals (keep references to prevent GC)
+# -----------------------------------------------------------------------------
+
 _SERVER = None
 _CLIENT = None          # QTcpSocket (single client)
 _CLIENT_STATE = None    # _ClientState (single client)
@@ -25,14 +32,24 @@ _CLIENT_STATE = None    # _ClientState (single client)
 _SERVER_CWD = os.getcwd()
 _SERVER_CWD_REAL = os.path.realpath(_SERVER_CWD)
 
-# Server state for JSON-RPC methods (需求2)
-_STATE = {
-    "layout": None,               # pya.Layout
-    "layout_id": None,            # string
-    "top_cell": None,             # pya.Cell
-    "top_cell_name": None,        # string
-    "current_layer_index": None,  # int
-}
+
+class SessionState:
+    """Server-side session state (single client, single in-memory layout)."""
+
+    def __init__(self):
+        self.layout = None               # pya.Layout
+        self.layout_id = None            # string (v0 uses "L1")
+        self.top_cell = None             # pya.Cell
+        self.top_cell_name = None        # string
+        self.current_layer_index = None  # int
+
+
+_STATE = SessionState()
+
+
+# -----------------------------------------------------------------------------
+# Transport helpers
+# -----------------------------------------------------------------------------
 
 
 def _bytes_to_py(b):
@@ -52,7 +69,15 @@ class _ClientState:
         self.buf = b""
 
 
-# --- JSON-RPC helpers ---
+def _send_obj(sock, obj):
+    line = (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
+    sock.write(line)
+
+
+# -----------------------------------------------------------------------------
+# JSON-RPC core
+# -----------------------------------------------------------------------------
+
 
 def _jsonrpc_error(_id, code, message, data=None):
     err = {"code": int(code), "message": str(message)}
@@ -65,15 +90,18 @@ def _jsonrpc_result(_id, result):
     return {"jsonrpc": "2.0", "id": _id, "result": result}
 
 
-def _send_obj(sock, obj):
-    line = (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
-    sock.write(line)
-
-
 def _require_active_layout(_id):
-    if _STATE.get("layout") is None:
+    if _STATE.layout is None:
         return _jsonrpc_error(_id, -32001, "No active layout: call layout.new first")
     return None
+
+
+def _ensure_params_object(_id, params):
+    if params is None:
+        return {}, None
+    if not isinstance(params, dict):
+        return None, _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
+    return params, None
 
 
 def _layer_index_from_params(layout, params, _id):
@@ -87,29 +115,37 @@ def _layer_index_from_params(layout, params, _id):
     if "layer_index" in params and params["layer_index"] is not None:
         li = params["layer_index"]
         if not isinstance(li, int):
-            return None, _jsonrpc_error(_id, -32602, f"Invalid params: layer_index must be int, got {type(li).__name__}")
+            return None, _jsonrpc_error(
+                _id,
+                -32602,
+                f"Invalid params: layer_index must be int, got {type(li).__name__}",
+            )
         return li, None
 
     layer_obj = params.get("layer", None)
     if layer_obj is not None:
         if not isinstance(layer_obj, dict):
             return None, _jsonrpc_error(_id, -32602, "Invalid params: layer must be an object")
+
         ln = layer_obj.get("layer", 1)
         dt = layer_obj.get("datatype", 0)
         nm = layer_obj.get("name", None)
+
         if not isinstance(ln, int) or not isinstance(dt, int):
             return None, _jsonrpc_error(_id, -32602, "Invalid params: layer.layer and layer.datatype must be int")
+
         if nm is None:
             info = pya.LayerInfo(ln, dt)
         else:
             if not isinstance(nm, str):
                 return None, _jsonrpc_error(_id, -32602, "Invalid params: layer.name must be string or null")
             info = pya.LayerInfo(ln, dt, nm)
+
         li = int(layout.layer(info))
         return li, None
 
-    if _STATE.get("current_layer_index") is not None:
-        return int(_STATE["current_layer_index"]), None
+    if _STATE.current_layer_index is not None:
+        return int(_STATE.current_layer_index), None
 
     return None, _jsonrpc_error(
         _id,
@@ -122,7 +158,6 @@ def _resolve_export_path(_id, path):
     if not isinstance(path, str) or not path:
         return None, _jsonrpc_error(_id, -32602, "Invalid params: path must be a non-empty string")
 
-    # Resolve against server cwd
     if os.path.isabs(path):
         full = path
     else:
@@ -134,19 +169,22 @@ def _resolve_export_path(_id, path):
     if not (full_real == _SERVER_CWD_REAL or full_real.startswith(allowed_prefix)):
         return None, _jsonrpc_error(_id, -32010, f"Path not allowed (escapes server cwd): {path}")
 
-    # Return as given (relative preferred) and resolved absolute
-    return (path, full_real), None
+    return {"rel": path, "abs": full_real}, None
 
 
-# --- Method handlers ---
+# -----------------------------------------------------------------------------
+# Method handlers (spec v0)
+# -----------------------------------------------------------------------------
+
 
 def _m_ping(_id, params):
     return _jsonrpc_result(_id, {"pong": True})
 
 
 def _m_layout_new(_id, params):
-    if not isinstance(params, dict):
-        return _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
 
     dbu = params.get("dbu", 0.0005)
     top_cell_name = params.get("top_cell", "TOP")
@@ -164,22 +202,25 @@ def _m_layout_new(_id, params):
     if not isinstance(clear_previous, bool):
         return _jsonrpc_error(_id, -32602, "Invalid params: clear_previous must be boolean")
 
-    if _STATE.get("layout") is not None and not clear_previous:
-        # Keep existing layout
+    if _STATE.layout is not None and not clear_previous:
         return _jsonrpc_result(
             _id,
-            {"layout_id": _STATE.get("layout_id"), "dbu": float(_STATE["layout"].dbu), "top_cell": _STATE.get("top_cell_name")},
+            {
+                "layout_id": _STATE.layout_id,
+                "dbu": float(_STATE.layout.dbu),
+                "top_cell": _STATE.top_cell_name,
+            },
         )
 
     layout = pya.Layout()
     layout.dbu = dbu
     top_cell = layout.create_cell(top_cell_name)
 
-    _STATE["layout"] = layout
-    _STATE["layout_id"] = "L1"
-    _STATE["top_cell"] = top_cell
-    _STATE["top_cell_name"] = top_cell_name
-    _STATE["current_layer_index"] = None
+    _STATE.layout = layout
+    _STATE.layout_id = "L1"
+    _STATE.top_cell = top_cell
+    _STATE.top_cell_name = top_cell_name
+    _STATE.current_layer_index = None
 
     return _jsonrpc_result(_id, {"layout_id": "L1", "dbu": dbu, "top_cell": top_cell_name})
 
@@ -189,8 +230,9 @@ def _m_layer_new(_id, params):
     if err:
         return err
 
-    if not isinstance(params, dict):
-        return _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
 
     ln = params.get("layer", 1)
     dt = params.get("datatype", 0)
@@ -204,17 +246,15 @@ def _m_layer_new(_id, params):
     if not isinstance(as_current, bool):
         return _jsonrpc_error(_id, -32602, "Invalid params: as_current must be boolean")
 
-    layout = _STATE["layout"]
-
     if nm is None:
         info = pya.LayerInfo(ln, dt)
     else:
         info = pya.LayerInfo(ln, dt, nm)
 
-    li = int(layout.layer(info))
+    li = int(_STATE.layout.layer(info))
 
     if as_current:
-        _STATE["current_layer_index"] = li
+        _STATE.current_layer_index = li
 
     return _jsonrpc_result(_id, {"layer_index": li, "layer": ln, "datatype": dt, "name": nm})
 
@@ -224,25 +264,24 @@ def _m_shape_create(_id, params):
     if err:
         return err
 
-    if not isinstance(params, dict):
-        return _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
-
-    layout = _STATE["layout"]
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
 
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
         return _jsonrpc_error(_id, -32602, "Invalid params: cell must be a non-empty string")
 
-    if not layout.has_cell(cell_name):
+    if not _STATE.layout.has_cell(cell_name):
         return _jsonrpc_error(_id, -32002, f"Cell not found: {cell_name}")
 
-    cell = layout.cell(cell_name)
+    cell = _STATE.layout.cell(cell_name)
 
     units = params.get("units", "dbu")
     if units != "dbu":
         return _jsonrpc_error(_id, -32602, f"Invalid params: units must be 'dbu' (got {units!r})")
 
-    li, li_err = _layer_index_from_params(layout, params, _id)
+    li, li_err = _layer_index_from_params(_STATE.layout, params, _id)
     if li_err:
         return li_err
 
@@ -253,8 +292,7 @@ def _m_shape_create(_id, params):
         if not (isinstance(coords, list) and len(coords) == 4 and all(isinstance(v, int) for v in coords)):
             return _jsonrpc_error(_id, -32602, "Invalid params: box coords must be [x1,y1,x2,y2] (int DBU)")
         x1, y1, x2, y2 = coords
-        box = pya.Box(x1, y1, x2, y2)
-        cell.shapes(li).insert(box)
+        cell.shapes(li).insert(pya.Box(x1, y1, x2, y2))
         return _jsonrpc_result(_id, {"inserted": True, "type": "box", "cell": cell_name, "layer_index": int(li)})
 
     if shape_type == "polygon":
@@ -265,9 +303,11 @@ def _m_shape_create(_id, params):
             if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
                 return _jsonrpc_error(_id, -32602, "Invalid params: polygon point must be [x,y] (int DBU)")
             pts.append(pya.Point(p[0], p[1]))
-        poly = pya.Polygon(pts)
-        cell.shapes(li).insert(poly)
-        return _jsonrpc_result(_id, {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li)})
+        cell.shapes(li).insert(pya.Polygon(pts))
+        return _jsonrpc_result(
+            _id,
+            {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li)},
+        )
 
     return _jsonrpc_error(_id, -32602, f"Invalid params: unsupported shape type: {shape_type}")
 
@@ -277,8 +317,9 @@ def _m_layout_export(_id, params):
     if err:
         return err
 
-    if not isinstance(params, dict):
-        return _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
 
     path = params.get("path", None)
     overwrite = params.get("overwrite", True)
@@ -290,17 +331,15 @@ def _m_layout_export(_id, params):
     if perr:
         return perr
 
-    rel_path, full_real = resolved
-
-    if os.path.exists(full_real) and not overwrite:
-        return _jsonrpc_error(_id, -32011, f"File exists and overwrite=false: {rel_path}")
+    if os.path.exists(resolved["abs"]) and not overwrite:
+        return _jsonrpc_error(_id, -32011, f"File exists and overwrite=false: {resolved['rel']}")
 
     try:
-        _STATE["layout"].write(full_real)
+        _STATE.layout.write(resolved["abs"])
     except Exception as e:
         return _jsonrpc_error(_id, -32099, f"Internal error during export: {e}")
 
-    return _jsonrpc_result(_id, {"written": True, "path": rel_path})
+    return _jsonrpc_result(_id, {"written": True, "path": resolved["rel"]})
 
 
 _METHODS = {
@@ -313,7 +352,6 @@ _METHODS = {
 
 
 def _handle_request(req):
-    # Basic validation
     if not isinstance(req, dict):
         return _jsonrpc_error(None, -32600, "Invalid Request: request must be an object")
 
@@ -329,14 +367,40 @@ def _handle_request(req):
 
     if params is None:
         params = {}
-    if not isinstance(params, dict):
-        return _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
 
     fn = _METHODS.get(method)
     if fn is None:
         return _jsonrpc_error(_id, -32601, f"Method not found: {method}")
 
-    return fn(_id, params)
+    try:
+        return fn(_id, params)
+    except Exception as e:
+        # If we know the reason, methods should return a specific error already.
+        return _jsonrpc_error(_id, -32099, f"Internal error: {e}")
+
+
+def _handle_line(sock, raw_line):
+    if not raw_line.strip():
+        return
+
+    try:
+        req = json.loads(raw_line.decode("utf-8"))
+    except Exception as e:
+        _send_obj(sock, _jsonrpc_error(None, -32700, f"Parse error: {e}"))
+        return
+
+    # Notifications: if id is omitted -> no response
+    if isinstance(req, dict) and ("id" not in req):
+        _handle_request(req)
+        return
+
+    resp = _handle_request(req)
+    _send_obj(sock, resp)
+
+
+# -----------------------------------------------------------------------------
+# Qt socket callbacks
+# -----------------------------------------------------------------------------
 
 
 def _on_client_ready_read(state):
@@ -350,24 +414,7 @@ def _on_client_ready_read(state):
 
     while b"\n" in state.buf:
         raw_line, state.buf = state.buf.split(b"\n", 1)
-        if not raw_line.strip():
-            continue
-
-        try:
-            req = json.loads(raw_line.decode("utf-8"))
-        except Exception as e:
-            # JSON parse error: provide concrete reason
-            resp = _jsonrpc_error(None, -32700, f"Parse error: {e}")
-            _send_obj(sock, resp)
-            continue
-
-        resp = _handle_request(req)
-
-        # Notification: if id is omitted -> no response
-        if isinstance(req, dict) and ("id" not in req):
-            continue
-
-        _send_obj(sock, resp)
+        _handle_line(sock, raw_line)
 
 
 def _on_client_disconnected(sock):
@@ -447,7 +494,11 @@ def start_server(port=0):
     return actual_port
 
 
-# Auto-start when macro runs
+# -----------------------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------------------
+
+
 _env_port = int(os.environ.get("KLAYOUT_SERVER_PORT", "0"))
 PORT = start_server(_env_port)
 print("[klayout-gui-server] PORT=", PORT, flush=True)
