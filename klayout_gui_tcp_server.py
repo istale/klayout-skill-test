@@ -116,7 +116,8 @@ def start_server(port=0):
     _SERVER.newConnection = _on_new_connection
 
     # Note: listen() expects a QHostAddress object, not the SpecialAddress enum.
-    ok = _SERVER.listen(pya.QHostAddress(pya.QHostAddress.LocalHost), int(port))
+    addr = pya.QHostAddress.new_special(pya.QHostAddress.LocalHost)
+    ok = _SERVER.listen(addr, int(port))
     if not ok:
         err = "unknown"
         try:
