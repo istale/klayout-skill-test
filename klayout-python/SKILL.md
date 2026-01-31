@@ -1,29 +1,34 @@
 ---
 name: klayout-python
-description: Write KLayout (pya) Python macros, scripts, and layout automation (DB/geometry/app APIs).
+description: Write KLayout (pya) Python macros, scripts, and layout automation (Qt5; offline docs bundled).
 ---
 
-# KLayout Python (pya)
+# KLayout Python (pya) — Qt5 (Offline)
 
 Use this skill when you need to **script KLayout** with Python:
 - write **macros** (GUI or batch)
-- generate or edit layouts (GDS/OAS)
+- generate/edit layouts (GDS/OAS)
 - run geometry/region operations
-- interact with the KLayout application UI APIs
+- interact with KLayout application APIs
 
-Official docs (Qt5): https://www.klayout.de/doc-qt5/programming/index.html
+This skill is designed for **offline machines**. The full Qt5 programming + class reference is bundled under:
+- `references/docs_md/` (preferred; searchable markdown)
+- `references/docs_html/` (raw mirror)
+
+Start here:
+- `references/docs_md/INDEX.md`
 
 ## Key facts (from docs)
-- Python binding module is **`pya`** (Ruby uses `RBA`) and class/method names are mostly the same.
-- Python macros are loaded from **`.py`** files or **`.lym`** files with interpreter set to Python.
-- KLayout uses `KLAYOUT_PYTHONPATH` (Python >=3) to extend Python search paths.
+- Python binding module is **`pya`** (Ruby uses `RBA`)
+- Python macros can be `.py` or `.lym` with interpreter set to Python
+- KLayout extends Python search via `KLAYOUT_PYTHONPATH` (Python >= 3)
 
-See `references/overview.md` for a compact cheat sheet.
+Source pages (online originals):
+- https://www.klayout.de/doc-qt5/programming/index.html
+- https://www.klayout.de/doc-qt5/programming/python.html
 
 ## Working modes
 ### 1) Standalone / batch script
-Use when you just need DB/geometry work and file I/O.
-
 Typical flow:
 1. `import pya`
 2. `layout = pya.Layout()`
@@ -31,27 +36,35 @@ Typical flow:
 4. `layout.write("out.gds")`
 
 ### 2) In-app macro (GUI)
-Use when you need views, layer lists, selections, markers, menus, etc.
-
 Typical flow:
 1. `app = pya.Application.instance()`
 2. `mw = app.main_window()`
-3. get/create view/layout, then operate on `LayoutView`/`CellView`.
+3. use `LayoutView` / `CellView` / menus / markers.
 
-## Coordinate conventions
-- The DB stores **integer coordinates in database units** (`layout.dbu` is microns per DB unit).
-- Many classes have **D*** floating-point twins (e.g. `DBox`) in **microns**.
+## How to search the offline docs
+When you need an API detail, search locally:
+
+```bash
+# from repo root
+grep -RIn "LayoutView" klayout-python/references/docs_md | head
+
+# if ripgrep is available
+rg -n "class_Layout" klayout-python/references/docs_md/code | head
+```
+
+Prefer the programming pages first:
+- `references/docs_md/programming/*.md`
+
+Then jump into the class reference:
+- `references/docs_md/code/index.md`
 
 ## Templates
 Use the example scripts in `scripts/` as starting points:
 - `basic_template.py` — create a layout/cell/layer and insert shapes
-- `file_io_template.py` — read/merge/write with options
+- `file_io_template.py` — read/merge/write
 - `hierarchical_layout.py` — cell instances / arrays
 - `region_operations.py` — Regions + boolean/sizing
-- `drc_template.py` — placeholder patterns for rule checks (adjust to your DRC flow)
+- `drc_template.py` — DRC patterns (adjust to your flow)
 
-## When you need more detail
-Read:
-- `references/overview.md`
-
-Then consult the class reference pages linked from the programming docs index.
+## Quick cheat sheet
+See `references/overview.md` (small, curated). For canonical behavior, consult `references/docs_md/*`.

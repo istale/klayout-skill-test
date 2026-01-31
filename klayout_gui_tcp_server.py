@@ -1,22 +1,20 @@
 """KLayout Python macro: minimal TCP server (localhost) to validate request/response.
 
 Goal (需求1 / TDD step 1):
-- Start a TCP server inside KLayout GUI event loop.
-- Accept client connections.
+- Start a TCP server inside KLayout's event loop.
+- Accept one client connection.
 - For each line-based request, respond.
 
 Protocol (v0):
 - Client sends:  ping\n
 - Server replies: pong\n
-
-How to run:
-- In KLayout: Macro IDE -> Python -> load/run this file.
-- Watch the Macro console for the chosen port.
-- Run client: python3 test_client_ping.py <port>
-
 Notes:
 - Server binds to localhost only (127.0.0.1).
-- We keep global references so objects won't be GC'd.
+- Single-client only: extra connections are rejected.
+- Keep global references so Qt objects won't be GC'd.
+- Intended run modes:
+  - GUI: run from Macro IDE
+  - Headless: /home/istale/klayout-build/0.30.5-qt5/klayout -e -rm <this_file>
 """
 
 import os
@@ -24,8 +22,8 @@ import pya
 
 # Keep globals to prevent garbage collection of Qt objects/callbacks
 _SERVER = None
-_CLIENTS = []  # list[QTcpSocket]
-# (reserved)
+_CLIENT = None          # QTcpSocket (single client)
+_CLIENT_STATE = None    # _ClientState (single client)
 
 
 def _bytes_to_py(b):
@@ -47,16 +45,11 @@ class _ClientState:
 
 
 def _handle_line(sock, line_bytes):
-    # line_bytes includes no trailing \n
+    """Handle a single request line (without trailing \n)."""
     cmd = line_bytes.decode("utf-8", errors="replace").strip()
 
     if cmd == "ping":
         sock.write(b"pong\n")
-        return
-
-    if cmd == "quit":
-        sock.write(b"bye\n")
-        sock.disconnectFromHost()
         return
 
     sock.write(("err unknown_command: %s\n" % cmd).encode("utf-8"))
@@ -65,7 +58,6 @@ def _handle_line(sock, line_bytes):
 def _on_client_ready_read(state):
     sock = state.sock
 
-    # Read all available
     data = _bytes_to_py(sock.readAll())
     if not data:
         return
@@ -78,21 +70,35 @@ def _on_client_ready_read(state):
 
 
 def _on_client_disconnected(sock):
-    global _CLIENTS
-    _CLIENTS = [c for c in _CLIENTS if c is not sock]
+    global _CLIENT, _CLIENT_STATE
+    if sock is _CLIENT:
+        _CLIENT = None
+        _CLIENT_STATE = None
 
 
 def _on_new_connection():
-    global _SERVER, _CLIENTS
+    global _SERVER, _CLIENT, _CLIENT_STATE
 
+    # Single-client policy: accept only the first active client.
     while _SERVER.hasPendingConnections():
         sock = _SERVER.nextPendingConnection()
-        _CLIENTS.append(sock)
 
-        state = _ClientState(sock)
+        if _CLIENT is not None:
+            # Reject additional clients.
+            try:
+                sock.close()
+            except Exception:
+                try:
+                    sock.disconnectFromHost()
+                except Exception:
+                    pass
+            continue
+
+        _CLIENT = sock
+        _CLIENT_STATE = _ClientState(sock)
 
         # Bind signals (KLayout Qt binding exposes signals as assignable attributes)
-        sock.readyRead = lambda st=state: _on_client_ready_read(st)
+        sock.readyRead = lambda st=_CLIENT_STATE: _on_client_ready_read(st)
         sock.disconnected = lambda s=sock: _on_client_disconnected(s)
 
         try:
@@ -110,9 +116,15 @@ def start_server(port=0):
         print("[klayout-gui-server] already listening on", _SERVER.serverPort())
         return int(_SERVER.serverPort())
 
-    # Parent to main window so lifetime is tied to GUI
-    mw = pya.Application.instance().main_window()
-    _SERVER = pya.QTcpServer(mw)
+    app = pya.Application.instance()
+    mw = None
+    try:
+        mw = app.main_window()
+    except Exception:
+        mw = None
+
+    # Parent to main window in GUI; otherwise parent to app instance (headless)
+    _SERVER = pya.QTcpServer(mw if mw is not None else app)
 
     # Bind signal
     _SERVER.newConnection = _on_new_connection
@@ -132,16 +144,17 @@ def start_server(port=0):
 
     msg = "[klayout-gui-server] listening on 127.0.0.1:%d" % actual_port
     print(msg)
-    try:
-        mw.message(msg)
-    except Exception:
-        pass
+    if mw is not None:
+        try:
+            mw.message(msg)
+        except Exception:
+            pass
 
     return actual_port
 
 
 def stop_server():
-    global _SERVER, _CLIENTS
+    global _SERVER, _CLIENT, _CLIENT_STATE
     if _SERVER is None:
         return
     try:
@@ -149,12 +162,12 @@ def stop_server():
     except Exception:
         pass
     _SERVER = None
-    _CLIENTS = []
+    _CLIENT = None
+    _CLIENT_STATE = None
     print("[klayout-gui-server] stopped")
 
 
 # Auto-start when macro runs
 _env_port = int(os.environ.get("KLAYOUT_SERVER_PORT", "0"))
-
 PORT = start_server(_env_port)
 print("[klayout-gui-server] PORT=", PORT, flush=True)

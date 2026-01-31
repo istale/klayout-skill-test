@@ -8,14 +8,14 @@ Validate that a **KLayout Python macro** can host a **TCP server** (localhost on
 - `test_client_ping.py`: external client test. Sends `ping\n`, expects `pong\n`.
 
 ## Run (GUI)
-1) Open KLayout GUI
+1) Open KLayout GUI (executable: `/home/istale/klayout-build/0.30.5-qt5/klayout`)
 2) Macro IDE → Python → run `klayout_gui_tcp_server.py`
 3) In the macro console, note the printed port line:
    - `[klayout-gui-server] PORT= <port>`
 4) From a terminal:
 
 ```bash
-python3 test_client_ping.py <port>
+python3 /home/istale/.openclaw/workspace/klayout_skill_test/test_client_ping.py <port>
 ```
 
 Expect `OK`.
@@ -23,19 +23,28 @@ Expect `OK`.
 ## Run (headless smoke test)
 This keeps running until you stop the process.
 
+Prereq (dynamic linker):
+- If you are running from a fresh shell, ensure `LD_LIBRARY_PATH` includes the KLayout build directory.
+- Recommended one-time setup: add to `~/.profile`:
+  - `export KLAYOUT_HOME="/home/istale/klayout-build/0.30.5-qt5"`
+  - `export LD_LIBRARY_PATH="$KLAYOUT_HOME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`
+
 Terminal A:
 ```bash
 cd /home/istale/.openclaw/workspace/klayout_skill_test
-KLAYOUT_SERVER_PORT=5055 klayout -e -rm klayout_gui_tcp_server.py
+KLAYOUT_SERVER_PORT=5055 /home/istale/klayout-build/0.30.5-qt5/klayout -e -rm klayout_gui_tcp_server.py
 ```
 
 Terminal B:
 ```bash
-python3 test_client_ping.py 5055
+python3 /home/istale/.openclaw/workspace/klayout_skill_test/test_client_ping.py 5055
 ```
 
 ## Protocol v0
 Line-based UTF-8-ish (best effort):
 - `ping` → `pong`
-- `quit` → `bye` then disconnect
 - unknown → `err unknown_command: ...`
+
+Single-client only:
+- Only one client connection is supported at a time.
+- Additional connections are rejected.
