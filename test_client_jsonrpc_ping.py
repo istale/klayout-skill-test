@@ -27,20 +27,31 @@ def recv_line(s: socket.socket) -> bytes:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: test_client_jsonrpc_ping.py <port>", file=sys.stderr)
+    verbose = False
+    args = list(sys.argv[1:])
+    if "--verbose" in args:
+        verbose = True
+        args.remove("--verbose")
+
+    if len(args) != 1:
+        print("usage: test_client_jsonrpc_ping.py [--verbose] <port>", file=sys.stderr)
         return 2
 
-    port = int(sys.argv[1])
+    port = int(args[0])
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(2.0)
     s.connect(("127.0.0.1", port))
 
     req = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+    if verbose:
+        print(">>>", json.dumps(req, ensure_ascii=False))
+
     s.sendall((json.dumps(req) + "\n").encode("utf-8"))
 
     raw = recv_line(s)
+    if verbose:
+        print("<<<", raw.decode("utf-8", errors="replace").rstrip("\n"))
     s.close()
 
     if not raw.endswith(b"\n"):

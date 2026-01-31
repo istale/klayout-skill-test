@@ -30,12 +30,16 @@ def recv_line(s: socket.socket) -> bytes:
     return buf
 
 
-def rpc(s: socket.socket, _id: int, method: str, params: dict):
+def rpc(s: socket.socket, _id: int, method: str, params: dict, verbose: bool = False):
     req = {"jsonrpc": "2.0", "id": _id, "method": method, "params": params}
+    if verbose:
+        print(">>>", json.dumps(req, ensure_ascii=False))
     s.sendall((json.dumps(req) + "\n").encode("utf-8"))
     raw = recv_line(s)
     if not raw.endswith(b"\n"):
         raise AssertionError(f"Response not newline-terminated: {raw!r}")
+    if verbose:
+        print("<<<", raw.decode("utf-8", errors="replace").rstrip("\n"))
     return json.loads(raw.decode("utf-8"))
 
 
@@ -59,31 +63,37 @@ def assert_result(resp: dict):
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: test_client_jsonrpc_req3_cell_create.py <port>", file=sys.stderr)
+    verbose = False
+    args = list(sys.argv[1:])
+    if "--verbose" in args:
+        verbose = True
+        args.remove("--verbose")
+
+    if len(args) != 1:
+        print("usage: test_client_jsonrpc_req3_cell_create.py [--verbose] <port>", file=sys.stderr)
         return 2
 
-    port = int(sys.argv[1])
+    port = int(args[0])
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(3.0)
     s.connect(("127.0.0.1", port))
 
     # 1) No active layout
-    r1 = rpc(s, 1, "cell.create", {"name": "CHILD"})
+    r1 = rpc(s, 1, "cell.create", {"name": "CHILD"}, verbose)
     assert_error(r1, "No active layout", "NoActiveLayout")
 
     # 2) Create layout then create cell
-    r2 = rpc(s, 2, "layout.new", {})
+    r2 = rpc(s, 2, "layout.new", {}, verbose)
     assert_result(r2)
 
-    r3 = rpc(s, 3, "cell.create", {"name": "CHILD"})
+    r3 = rpc(s, 3, "cell.create", {"name": "CHILD"}, verbose)
     assert_result(r3)
     if r3["result"].get("created") is not True or r3["result"].get("name") != "CHILD":
         raise AssertionError(f"Unexpected result for cell.create: {r3!r}")
 
     # 3) Create same cell again -> error
-    r4 = rpc(s, 4, "cell.create", {"name": "CHILD"})
+    r4 = rpc(s, 4, "cell.create", {"name": "CHILD"}, verbose)
     assert_error(r4, "Cell already exists: CHILD", "CellAlreadyExists")
 
     s.close()
