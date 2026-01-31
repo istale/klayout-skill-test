@@ -86,6 +86,18 @@ def _jsonrpc_error(_id, code, message, data=None):
     return {"jsonrpc": "2.0", "id": _id, "error": err}
 
 
+# From req3 onward, error classification is done via strings:
+# - error.code is kept only to satisfy JSON-RPC 2.0
+# - error.message must contain the concrete reason
+# - error.data.type provides a machine-readable error type
+
+def _err(_id, message, etype, data=None):
+    d = {"type": str(etype)}
+    if isinstance(data, dict):
+        d.update(data)
+    return _jsonrpc_error(_id, -32000, message, d)
+
+
 def _jsonrpc_result(_id, result):
     return {"jsonrpc": "2.0", "id": _id, "result": result}
 
@@ -93,6 +105,12 @@ def _jsonrpc_result(_id, result):
 def _require_active_layout(_id):
     if _STATE.layout is None:
         return _jsonrpc_error(_id, -32001, "No active layout: call layout.new first")
+    return None
+
+
+def _require_active_layout_str(_id):
+    if _STATE.layout is None:
+        return _err(_id, "No active layout: call layout.new first", "NoActiveLayout")
     return None
 
 
@@ -259,6 +277,31 @@ def _m_layer_new(_id, params):
     return _jsonrpc_result(_id, {"layer_index": li, "layer": ln, "datatype": dt, "name": nm})
 
 
+def _m_cell_create(_id, params):
+    """需求3-1: create a cell.
+
+    Error classification uses string message + error.data.type.
+    """
+    err = _require_active_layout_str(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        # For param-shape issues we keep legacy -32602 style.
+        return perr
+
+    name = params.get("name", None)
+    if not isinstance(name, str) or not name:
+        return _err(_id, "Invalid params: name must be a non-empty string", "InvalidParams", {"field": "name"})
+
+    if _STATE.layout.has_cell(name):
+        return _err(_id, f"Cell already exists: {name}", "CellAlreadyExists", {"name": name})
+
+    _STATE.layout.create_cell(name)
+    return _jsonrpc_result(_id, {"created": True, "name": name})
+
+
 def _m_shape_create(_id, params):
     err = _require_active_layout(_id)
     if err:
@@ -346,6 +389,7 @@ _METHODS = {
     "ping": _m_ping,
     "layout.new": _m_layout_new,
     "layer.new": _m_layer_new,
+    "cell.create": _m_cell_create,
     "shape.create": _m_shape_create,
     "layout.export": _m_layout_export,
 }
