@@ -110,5 +110,6 @@ run_one test_client_jsonrpc_req3_cell_create.py
 run_one test_client_jsonrpc_req3_instance_create.py
 run_one test_client_jsonrpc_req3_instance_array_create.py
 run_one test_client_jsonrpc_req4_generate_export_open.py
+run_one test_client_jsonrpc_req5_layout_info.py
 
 echo "[run_all_tests] ALL OK"

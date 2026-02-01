@@ -580,6 +580,199 @@ def _m_layout_open(_id, params):
     )
 
 
+def _m_layout_get_topcell(_id, params):
+    """需求5-1: get the (single) top cell name.
+
+    Errors:
+      - NoActiveLayout
+      - NoTopCell
+      - MultipleTopCells
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    try:
+        tops = _STATE.layout.top_cells()
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+    if not tops or len(tops) == 0:
+        return _err(_id, -32020, "No top cell in layout", "NoTopCell")
+
+    if len(tops) != 1:
+        return _err(
+            _id,
+            -32021,
+            f"Multiple top cells in layout: {len(tops)}",
+            "MultipleTopCells",
+            {"count": int(len(tops)), "names": [c.name for c in tops]},
+        )
+
+    return _jsonrpc_result(_id, {"top_cell": tops[0].name})
+
+
+def _m_layout_get_layers(_id, params):
+    """需求5-2: get list of valid layers (definition-based)."""
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    try:
+        idxs = list(_STATE.layout.layer_indexes())
+        infos = list(_STATE.layout.layer_infos())
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+    layers = []
+    for li, info in zip(idxs, infos):
+        try:
+            layer_num = int(getattr(info, "layer"))
+        except Exception:
+            layer_num = None
+        try:
+            datatype = int(getattr(info, "datatype"))
+        except Exception:
+            datatype = None
+        try:
+            name = getattr(info, "name")
+        except Exception:
+            name = None
+        if name is not None and not isinstance(name, str):
+            name = str(name)
+
+        layers.append({"layer": layer_num, "datatype": datatype, "name": name, "layer_index": int(li)})
+
+    return _jsonrpc_result(_id, {"layers": layers})
+
+
+def _m_layout_get_dbu(_id, params):
+    """需求5-3: get dbu."""
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    return _jsonrpc_result(_id, {"dbu": float(_STATE.layout.dbu)})
+
+
+def _m_layout_get_cells(_id, params):
+    """需求5-4: get cell list."""
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    cells = []
+    try:
+        for ci in _STATE.layout.each_cell_top_down():
+            try:
+                c = _STATE.layout.cell(ci)
+                cells.append(c.name)
+            except Exception:
+                continue
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+    return _jsonrpc_result(_id, {"cells": cells})
+
+
+def _m_layout_get_hierarchy_depth(_id, params):
+    """需求5-5: get hierarchy depth.
+
+    Definition:
+      - depth = max instance edges from top (top=0)
+      - leaf/top with no instances -> depth 0
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    try:
+        tops = _STATE.layout.top_cells()
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+    if not tops or len(tops) == 0:
+        return _err(_id, -32020, "No top cell in layout", "NoTopCell")
+
+    if len(tops) != 1:
+        return _err(
+            _id,
+            -32021,
+            f"Multiple top cells in layout: {len(tops)}",
+            "MultipleTopCells",
+            {"count": int(len(tops)), "names": [c.name for c in tops]},
+        )
+
+    memo = {}
+
+    def cell_key(cell):
+        try:
+            return int(cell.cell_index())
+        except Exception:
+            try:
+                return int(cell.cell_index)
+            except Exception:
+                return id(cell)
+
+    def depth_from(cell, stack):
+        k = cell_key(cell)
+        if k in memo:
+            return memo[k]
+        if k in stack:
+            # Should not happen (recursive hierarchy), but avoid infinite loops.
+            memo[k] = 0
+            return 0
+        stack.add(k)
+        m = 0
+        try:
+            for inst in cell.each_inst():
+                try:
+                    cc = inst.cell
+                except Exception:
+                    try:
+                        cc = inst.cell_()
+                    except Exception:
+                        cc = None
+                if cc is None:
+                    continue
+                m = max(m, 1 + depth_from(cc, stack))
+        except Exception:
+            m = 0
+        stack.remove(k)
+        memo[k] = int(m)
+        return int(m)
+
+    depth = depth_from(tops[0], set())
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "depth": int(depth),
+            "depth_definition": "max instance edges from top (top=0)",
+        },
+    )
+
+
 def _req3_parent_child_cells(_id, params):
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
@@ -785,6 +978,12 @@ _METHODS.update(
         "instance.create": _m_instance_create,
         "instance_array.create": _m_instance_array_create,
         "layout.open": _m_layout_open,
+
+        "layout.get_topcell": _m_layout_get_topcell,
+        "layout.get_layers": _m_layout_get_layers,
+        "layout.get_dbu": _m_layout_get_dbu,
+        "layout.get_cells": _m_layout_get_cells,
+        "layout.get_hierarchy_depth": _m_layout_get_hierarchy_depth,
     }
 )
 
