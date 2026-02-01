@@ -80,6 +80,11 @@ def _send_obj(sock, obj):
 
 
 def _jsonrpc_error(_id, code, message, data=None):
+    """Create a JSON-RPC 2.0 error object.
+
+    NOTE: As of req3, all errors should carry a machine-readable type in
+    error.data.type (even when we keep legacy error.code values).
+    """
     err = {"code": int(code), "message": str(message)}
     if data is not None:
         err["data"] = data
@@ -87,15 +92,20 @@ def _jsonrpc_error(_id, code, message, data=None):
 
 
 # From req3 onward, error classification is done via strings:
-# - error.code is kept only to satisfy JSON-RPC 2.0
+# - error.code is kept only to satisfy JSON-RPC 2.0 (legacy tests may still assert it)
 # - error.message must contain the concrete reason
 # - error.data.type provides a machine-readable error type
 
-def _err(_id, message, etype, data=None):
+def _err(_id, code, message, etype, data=None):
     d = {"type": str(etype)}
     if isinstance(data, dict):
         d.update(data)
-    return _jsonrpc_error(_id, -32000, message, d)
+    return _jsonrpc_error(_id, code, message, d)
+
+
+def _err_std(_id, code, message, etype, data=None):
+    """Standard JSON-RPC errors (-326xx/-32700) but with req3-style type."""
+    return _err(_id, code, message, etype, data)
 
 
 def _jsonrpc_result(_id, result):
@@ -104,21 +114,20 @@ def _jsonrpc_result(_id, result):
 
 def _require_active_layout(_id):
     if _STATE.layout is None:
-        return _jsonrpc_error(_id, -32001, "No active layout: call layout.new first")
+        return _err(_id, -32001, "No active layout: call layout.new first", "NoActiveLayout")
     return None
 
 
 def _require_active_layout_str(_id):
-    if _STATE.layout is None:
-        return _err(_id, "No active layout: call layout.new first", "NoActiveLayout")
-    return None
+    # Backwards-compatible alias used by req3 handlers.
+    return _require_active_layout(_id)
 
 
 def _ensure_params_object(_id, params):
     if params is None:
         return {}, None
     if not isinstance(params, dict):
-        return None, _jsonrpc_error(_id, -32602, "Invalid params: params must be an object")
+        return None, _err_std(_id, -32602, "Invalid params: params must be an object", "InvalidParams")
     return params, None
 
 
@@ -133,30 +142,44 @@ def _layer_index_from_params(layout, params, _id):
     if "layer_index" in params and params["layer_index"] is not None:
         li = params["layer_index"]
         if not isinstance(li, int):
-            return None, _jsonrpc_error(
+            return None, _err_std(
                 _id,
                 -32602,
                 f"Invalid params: layer_index must be int, got {type(li).__name__}",
+                "InvalidParams",
+                {"field": "layer_index"},
             )
         return li, None
 
     layer_obj = params.get("layer", None)
     if layer_obj is not None:
         if not isinstance(layer_obj, dict):
-            return None, _jsonrpc_error(_id, -32602, "Invalid params: layer must be an object")
+            return None, _err_std(_id, -32602, "Invalid params: layer must be an object", "InvalidParams", {"field": "layer"})
 
         ln = layer_obj.get("layer", 1)
         dt = layer_obj.get("datatype", 0)
         nm = layer_obj.get("name", None)
 
         if not isinstance(ln, int) or not isinstance(dt, int):
-            return None, _jsonrpc_error(_id, -32602, "Invalid params: layer.layer and layer.datatype must be int")
+            return None, _err_std(
+                _id,
+                -32602,
+                "Invalid params: layer.layer and layer.datatype must be int",
+                "InvalidParams",
+                {"field": "layer"},
+            )
 
         if nm is None:
             info = pya.LayerInfo(ln, dt)
         else:
             if not isinstance(nm, str):
-                return None, _jsonrpc_error(_id, -32602, "Invalid params: layer.name must be string or null")
+                return None, _err_std(
+                    _id,
+                    -32602,
+                    "Invalid params: layer.name must be string or null",
+                    "InvalidParams",
+                    {"field": "layer.name"},
+                )
             info = pya.LayerInfo(ln, dt, nm)
 
         li = int(layout.layer(info))
@@ -165,16 +188,17 @@ def _layer_index_from_params(layout, params, _id):
     if _STATE.current_layer_index is not None:
         return int(_STATE.current_layer_index), None
 
-    return None, _jsonrpc_error(
+    return None, _err(
         _id,
         -32003,
         "Layer not available: specify layer_index or layer, or call layer.new first to set current layer",
+        "LayerNotAvailable",
     )
 
 
 def _resolve_export_path(_id, path):
     if not isinstance(path, str) or not path:
-        return None, _jsonrpc_error(_id, -32602, "Invalid params: path must be a non-empty string")
+        return None, _err_std(_id, -32602, "Invalid params: path must be a non-empty string", "InvalidParams", {"field": "path"})
 
     if os.path.isabs(path):
         full = path
@@ -185,7 +209,13 @@ def _resolve_export_path(_id, path):
 
     allowed_prefix = _SERVER_CWD_REAL + os.sep
     if not (full_real == _SERVER_CWD_REAL or full_real.startswith(allowed_prefix)):
-        return None, _jsonrpc_error(_id, -32010, f"Path not allowed (escapes server cwd): {path}")
+        return None, _err(
+            _id,
+            -32010,
+            f"Path not allowed (escapes server cwd): {path}",
+            "PathNotAllowed",
+            {"path": path},
+        )
 
     return {"rel": path, "abs": full_real}, None
 
@@ -209,16 +239,34 @@ def _m_layout_new(_id, params):
     clear_previous = params.get("clear_previous", True)
 
     if not isinstance(dbu, (int, float)):
-        return _jsonrpc_error(_id, -32602, f"Invalid params: dbu must be number, got {type(dbu).__name__}")
+        return _err_std(
+            _id,
+            -32602,
+            f"Invalid params: dbu must be number, got {type(dbu).__name__}",
+            "InvalidParams",
+            {"field": "dbu"},
+        )
     dbu = float(dbu)
     if dbu <= 0:
-        return _jsonrpc_error(_id, -32602, "Invalid params: dbu must be > 0")
+        return _err_std(_id, -32602, "Invalid params: dbu must be > 0", "InvalidParams", {"field": "dbu"})
 
     if not isinstance(top_cell_name, str) or not top_cell_name:
-        return _jsonrpc_error(_id, -32602, "Invalid params: top_cell must be a non-empty string")
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: top_cell must be a non-empty string",
+            "InvalidParams",
+            {"field": "top_cell"},
+        )
 
     if not isinstance(clear_previous, bool):
-        return _jsonrpc_error(_id, -32602, "Invalid params: clear_previous must be boolean")
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: clear_previous must be boolean",
+            "InvalidParams",
+            {"field": "clear_previous"},
+        )
 
     if _STATE.layout is not None and not clear_previous:
         return _jsonrpc_result(
@@ -258,11 +306,23 @@ def _m_layer_new(_id, params):
     as_current = params.get("as_current", True)
 
     if not isinstance(ln, int) or not isinstance(dt, int):
-        return _jsonrpc_error(_id, -32602, "Invalid params: layer and datatype must be int")
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: layer and datatype must be int",
+            "InvalidParams",
+            {"field": "layer"},
+        )
     if nm is not None and not isinstance(nm, str):
-        return _jsonrpc_error(_id, -32602, "Invalid params: name must be string or null")
+        return _err_std(_id, -32602, "Invalid params: name must be string or null", "InvalidParams", {"field": "name"})
     if not isinstance(as_current, bool):
-        return _jsonrpc_error(_id, -32602, "Invalid params: as_current must be boolean")
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: as_current must be boolean",
+            "InvalidParams",
+            {"field": "as_current"},
+        )
 
     if nm is None:
         info = pya.LayerInfo(ln, dt)
@@ -293,10 +353,10 @@ def _m_cell_create(_id, params):
 
     name = params.get("name", None)
     if not isinstance(name, str) or not name:
-        return _err(_id, "Invalid params: name must be a non-empty string", "InvalidParams", {"field": "name"})
+        return _err(_id, -32000, "Invalid params: name must be a non-empty string", "InvalidParams", {"field": "name"})
 
     if _STATE.layout.has_cell(name):
-        return _err(_id, f"Cell already exists: {name}", "CellAlreadyExists", {"name": name})
+        return _err(_id, -32000, f"Cell already exists: {name}", "CellAlreadyExists", {"name": name})
 
     _STATE.layout.create_cell(name)
     return _jsonrpc_result(_id, {"created": True, "name": name})
@@ -313,16 +373,22 @@ def _m_shape_create(_id, params):
 
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
-        return _jsonrpc_error(_id, -32602, "Invalid params: cell must be a non-empty string")
+        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
 
     if not _STATE.layout.has_cell(cell_name):
-        return _jsonrpc_error(_id, -32002, f"Cell not found: {cell_name}")
+        return _err(_id, -32002, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
 
     cell = _STATE.layout.cell(cell_name)
 
     units = params.get("units", "dbu")
     if units != "dbu":
-        return _jsonrpc_error(_id, -32602, f"Invalid params: units must be 'dbu' (got {units!r})")
+        return _err_std(
+            _id,
+            -32602,
+            f"Invalid params: units must be 'dbu' (got {units!r})",
+            "InvalidParams",
+            {"field": "units"},
+        )
 
     li, li_err = _layer_index_from_params(_STATE.layout, params, _id)
     if li_err:
@@ -333,18 +399,36 @@ def _m_shape_create(_id, params):
 
     if shape_type == "box":
         if not (isinstance(coords, list) and len(coords) == 4 and all(isinstance(v, int) for v in coords)):
-            return _jsonrpc_error(_id, -32602, "Invalid params: box coords must be [x1,y1,x2,y2] (int DBU)")
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: box coords must be [x1,y1,x2,y2] (int DBU)",
+                "InvalidParams",
+                {"field": "coords"},
+            )
         x1, y1, x2, y2 = coords
         cell.shapes(li).insert(pya.Box(x1, y1, x2, y2))
         return _jsonrpc_result(_id, {"inserted": True, "type": "box", "cell": cell_name, "layer_index": int(li)})
 
     if shape_type == "polygon":
         if not (isinstance(coords, list) and len(coords) >= 3):
-            return _jsonrpc_error(_id, -32602, "Invalid params: polygon coords must be [[x,y],...] with >=3 points")
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: polygon coords must be [[x,y],...] with >=3 points",
+                "InvalidParams",
+                {"field": "coords"},
+            )
         pts = []
         for p in coords:
             if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
-                return _jsonrpc_error(_id, -32602, "Invalid params: polygon point must be [x,y] (int DBU)")
+                return _err_std(
+                    _id,
+                    -32602,
+                    "Invalid params: polygon point must be [x,y] (int DBU)",
+                    "InvalidParams",
+                    {"field": "coords"},
+                )
             pts.append(pya.Point(p[0], p[1]))
         cell.shapes(li).insert(pya.Polygon(pts))
         return _jsonrpc_result(
@@ -352,7 +436,13 @@ def _m_shape_create(_id, params):
             {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li)},
         )
 
-    return _jsonrpc_error(_id, -32602, f"Invalid params: unsupported shape type: {shape_type}")
+    return _err_std(
+        _id,
+        -32602,
+        f"Invalid params: unsupported shape type: {shape_type}",
+        "InvalidParams",
+        {"field": "type"},
+    )
 
 
 def _m_layout_export(_id, params):
@@ -368,135 +458,73 @@ def _m_layout_export(_id, params):
     overwrite = params.get("overwrite", True)
 
     if not isinstance(overwrite, bool):
-        return _jsonrpc_error(_id, -32602, "Invalid params: overwrite must be boolean")
+        return _err_std(_id, -32602, "Invalid params: overwrite must be boolean", "InvalidParams", {"field": "overwrite"})
 
     resolved, perr = _resolve_export_path(_id, path)
     if perr:
         return perr
 
     if os.path.exists(resolved["abs"]) and not overwrite:
-        return _jsonrpc_error(_id, -32011, f"File exists and overwrite=false: {resolved['rel']}")
+        return _err(
+            _id,
+            -32011,
+            f"File exists and overwrite=false: {resolved['rel']}",
+            "FileExists",
+            {"path": resolved["rel"]},
+        )
 
     try:
         _STATE.layout.write(resolved["abs"])
     except Exception as e:
-        return _jsonrpc_error(_id, -32099, f"Internal error during export: {e}")
+        return _err(_id, -32099, f"Internal error during export: {e}", "InternalError")
 
     return _jsonrpc_result(_id, {"written": True, "path": resolved["rel"]})
 
 
-def _m_instance_create(_id, params):
-    """需求3-2: create a single instance.
-
-    Error classification uses string message + error.data.type.
-    """
-    err = _require_active_layout_str(_id)
-    if err:
-        return err
-
-    params, perr = _ensure_params_object(_id, params)
-    if perr:
-        return perr
-
+def _req3_parent_child_cells(_id, params):
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
-        return _err(_id, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+        return None, _err(_id, -32000, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
 
     child_name = params.get("child_cell", None)
     if not isinstance(child_name, str) or not child_name:
-        return _err(_id, "Invalid params: child_cell must be a non-empty string", "InvalidParams", {"field": "child_cell"})
-
-    if not _STATE.layout.has_cell(cell_name):
-        return _err(_id, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
-
-    if not _STATE.layout.has_cell(child_name):
-        return _err(_id, f"Child cell not found: {child_name}", "ChildCellNotFound", {"name": child_name})
-
-    trans = params.get("trans", {})
-    if trans is None:
-        trans = {}
-    if not isinstance(trans, dict):
-        return _err(_id, "Invalid params: trans must be an object", "InvalidParams", {"field": "trans"})
-
-    x = trans.get("x", 0)
-    y = trans.get("y", 0)
-    rot = trans.get("rot", 0)
-    mirror = trans.get("mirror", False)
-
-    if not isinstance(x, int) or not isinstance(y, int):
-        return _err(_id, "Invalid params: trans.x and trans.y must be int (DBU)", "InvalidParams", {"field": "trans"})
-
-    if not isinstance(rot, int):
-        return _err(_id, "Invalid params: trans.rot must be int degrees (0/90/180/270)", "InvalidParams", {"field": "trans.rot"})
-
-    if rot not in (0, 90, 180, 270):
-        return _err(
+        return None, _err(
             _id,
-            f"Invalid params: rot must be one of 0,90,180,270 (got {rot})",
+            -32000,
+            "Invalid params: child_cell must be a non-empty string",
             "InvalidParams",
-            {"field": "trans.rot", "allowed": [0, 90, 180, 270], "got": rot},
+            {"field": "child_cell"},
         )
 
-    if not isinstance(mirror, bool):
-        return _err(_id, "Invalid params: trans.mirror must be boolean", "InvalidParams", {"field": "trans.mirror"})
+    if not _STATE.layout.has_cell(cell_name):
+        return None, _err(_id, -32000, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
 
-    rot_quadrants = rot // 90
-    t = pya.Trans(rot_quadrants, mirror, x, y)
+    if not _STATE.layout.has_cell(child_name):
+        return None, _err(
+            _id,
+            -32000,
+            f"Child cell not found: {child_name}",
+            "ChildCellNotFound",
+            {"name": child_name},
+        )
 
     parent_cell = _STATE.layout.cell(cell_name)
     child_cell = _STATE.layout.cell(child_name)
 
-    # Create a single instance
-    cia = pya.CellInstArray(child_cell, t)
-    parent_cell.insert(cia)
-
-    return _jsonrpc_result(
-        _id,
-        {
-            "inserted": True,
-            "cell": cell_name,
-            "child_cell": child_name,
-            "trans": {"x": x, "y": y, "rot": rot, "mirror": mirror},
-        },
-    )
+    return {
+        "cell": cell_name,
+        "child_cell": child_name,
+        "parent_cell": parent_cell,
+        "child_cell_obj": child_cell,
+    }, None
 
 
-def _m_instance_array_create(_id, params):
-    """需求3-3: create a regular array of instances.
-
-    Params:
-      cell: parent cell name (default TOP)
-      child_cell: instantiated cell name (required)
-      trans: {x,y,rot,mirror} for the first instance (DBU, degrees)
-      array: {nx,ny,dx,dy} (DBU)
-    """
-    err = _require_active_layout_str(_id)
-    if err:
-        return err
-
-    params, perr = _ensure_params_object(_id, params)
-    if perr:
-        return perr
-
-    cell_name = params.get("cell", "TOP")
-    if not isinstance(cell_name, str) or not cell_name:
-        return _err(_id, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
-
-    child_name = params.get("child_cell", None)
-    if not isinstance(child_name, str) or not child_name:
-        return _err(_id, "Invalid params: child_cell must be a non-empty string", "InvalidParams", {"field": "child_cell"})
-
-    if not _STATE.layout.has_cell(cell_name):
-        return _err(_id, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
-
-    if not _STATE.layout.has_cell(child_name):
-        return _err(_id, f"Child cell not found: {child_name}", "ChildCellNotFound", {"name": child_name})
-
+def _req3_parse_trans(_id, params):
     trans = params.get("trans", {})
     if trans is None:
         trans = {}
     if not isinstance(trans, dict):
-        return _err(_id, "Invalid params: trans must be an object", "InvalidParams", {"field": "trans"})
+        return None, _err(_id, -32000, "Invalid params: trans must be an object", "InvalidParams", {"field": "trans"})
 
     x = trans.get("x", 0)
     y = trans.get("y", 0)
@@ -504,25 +532,51 @@ def _m_instance_array_create(_id, params):
     mirror = trans.get("mirror", False)
 
     if not isinstance(x, int) or not isinstance(y, int):
-        return _err(_id, "Invalid params: trans.x and trans.y must be int (DBU)", "InvalidParams", {"field": "trans"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: trans.x and trans.y must be int (DBU)",
+            "InvalidParams",
+            {"field": "trans"},
+        )
 
     if not isinstance(rot, int):
-        return _err(_id, "Invalid params: trans.rot must be int degrees (0/90/180/270)", "InvalidParams", {"field": "trans.rot"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: trans.rot must be int degrees (0/90/180/270)",
+            "InvalidParams",
+            {"field": "trans.rot"},
+        )
 
     if rot not in (0, 90, 180, 270):
-        return _err(
+        return None, _err(
             _id,
+            -32000,
             f"Invalid params: rot must be one of 0,90,180,270 (got {rot})",
             "InvalidParams",
             {"field": "trans.rot", "allowed": [0, 90, 180, 270], "got": rot},
         )
 
     if not isinstance(mirror, bool):
-        return _err(_id, "Invalid params: trans.mirror must be boolean", "InvalidParams", {"field": "trans.mirror"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: trans.mirror must be boolean",
+            "InvalidParams",
+            {"field": "trans.mirror"},
+        )
 
+    rot_quadrants = rot // 90
+    t = pya.Trans(rot_quadrants, mirror, x, y)
+
+    return {"t": t, "x": x, "y": y, "rot": rot, "mirror": mirror}, None
+
+
+def _req3_parse_array(_id, params):
     arr = params.get("array", None)
     if not isinstance(arr, dict):
-        return _err(_id, "Invalid params: array must be an object", "InvalidParams", {"field": "array"})
+        return None, _err(_id, -32000, "Invalid params: array must be an object", "InvalidParams", {"field": "array"})
 
     nx = arr.get("nx", None)
     ny = arr.get("ny", None)
@@ -530,74 +584,137 @@ def _m_instance_array_create(_id, params):
     dy = arr.get("dy", None)
 
     if not isinstance(nx, int) or nx < 1:
-        return _err(_id, "Invalid params: nx must be int >= 1", "InvalidParams", {"field": "array.nx", "got": nx})
+        return None, _err(_id, -32000, "Invalid params: nx must be int >= 1", "InvalidParams", {"field": "array.nx", "got": nx})
     if not isinstance(ny, int) or ny < 1:
-        return _err(_id, "Invalid params: ny must be int >= 1", "InvalidParams", {"field": "array.ny", "got": ny})
+        return None, _err(_id, -32000, "Invalid params: ny must be int >= 1", "InvalidParams", {"field": "array.ny", "got": ny})
     if not isinstance(dx, int) or not isinstance(dy, int):
-        return _err(_id, "Invalid params: dx and dy must be int (DBU)", "InvalidParams", {"field": "array"})
+        return None, _err(_id, -32000, "Invalid params: dx and dy must be int (DBU)", "InvalidParams", {"field": "array"})
 
-    rot_quadrants = rot // 90
-    t = pya.Trans(rot_quadrants, mirror, x, y)
+    return {"nx": nx, "ny": ny, "dx": dx, "dy": dy}, None
 
-    parent_cell = _STATE.layout.cell(cell_name)
-    child_cell = _STATE.layout.cell(child_name)
 
-    a = pya.Vector(dx, 0)
-    b = pya.Vector(0, dy)
+def _m_instance_create(_id, params):
+    """需求3-2: create a single instance."""
+    err = _require_active_layout_str(_id)
+    if err:
+        return err
 
-    cia = pya.CellInstArray(child_cell, t, a, b, nx, ny)
-    parent_cell.insert(cia)
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    cells, e = _req3_parent_child_cells(_id, params)
+    if e:
+        return e
+
+    tr, e = _req3_parse_trans(_id, params)
+    if e:
+        return e
+
+    # Create a single instance
+    cia = pya.CellInstArray(cells["child_cell_obj"], tr["t"])
+    cells["parent_cell"].insert(cia)
 
     return _jsonrpc_result(
         _id,
         {
             "inserted": True,
-            "cell": cell_name,
-            "child_cell": child_name,
-            "trans": {"x": x, "y": y, "rot": rot, "mirror": mirror},
-            "array": {"nx": nx, "ny": ny, "dx": dx, "dy": dy},
+            "cell": cells["cell"],
+            "child_cell": cells["child_cell"],
+            "trans": {"x": tr["x"], "y": tr["y"], "rot": tr["rot"], "mirror": tr["mirror"]},
         },
     )
 
 
-_METHODS = {
-    "ping": _m_ping,
-    "layout.new": _m_layout_new,
-    "layer.new": _m_layer_new,
-    "cell.create": _m_cell_create,
-    "shape.create": _m_shape_create,
-    "layout.export": _m_layout_export,
-    "instance.create": _m_instance_create,
-    "instance_array.create": _m_instance_array_create,
-}
+def _m_instance_array_create(_id, params):
+    """需求3-3: create a regular array of instances."""
+    err = _require_active_layout_str(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    cells, e = _req3_parent_child_cells(_id, params)
+    if e:
+        return e
+
+    tr, e = _req3_parse_trans(_id, params)
+    if e:
+        return e
+
+    arr, e = _req3_parse_array(_id, params)
+    if e:
+        return e
+
+    a = pya.Vector(arr["dx"], 0)
+    b = pya.Vector(0, arr["dy"])
+
+    cia = pya.CellInstArray(cells["child_cell_obj"], tr["t"], a, b, arr["nx"], arr["ny"])
+    cells["parent_cell"].insert(cia)
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "inserted": True,
+            "cell": cells["cell"],
+            "child_cell": cells["child_cell"],
+            "trans": {"x": tr["x"], "y": tr["y"], "rot": tr["rot"], "mirror": tr["mirror"]},
+            "array": {"nx": arr["nx"], "ny": arr["ny"], "dx": arr["dx"], "dy": arr["dy"]},
+        },
+    )
+
+
+_METHODS = {}
+
+# Spec v0 methods
+_METHODS.update(
+    {
+        "ping": _m_ping,
+        "layout.new": _m_layout_new,
+        "layer.new": _m_layer_new,
+        "shape.create": _m_shape_create,
+        "layout.export": _m_layout_export,
+    }
+)
+
+# Req3+ methods
+_METHODS.update(
+    {
+        "cell.create": _m_cell_create,
+        "instance.create": _m_instance_create,
+        "instance_array.create": _m_instance_array_create,
+    }
+)
 
 
 def _handle_request(req):
     if not isinstance(req, dict):
-        return _jsonrpc_error(None, -32600, "Invalid Request: request must be an object")
+        return _err_std(None, -32600, "Invalid Request: request must be an object", "InvalidRequest")
 
     if req.get("jsonrpc") != "2.0":
-        return _jsonrpc_error(req.get("id", None), -32600, "Invalid Request: jsonrpc must be '2.0'")
+        return _err_std(req.get("id", None), -32600, "Invalid Request: jsonrpc must be '2.0'", "InvalidRequest")
 
     _id = req.get("id", None)
     method = req.get("method", None)
     params = req.get("params", {})
 
     if not isinstance(method, str) or not method:
-        return _jsonrpc_error(_id, -32600, "Invalid Request: method must be a non-empty string")
+        return _err_std(_id, -32600, "Invalid Request: method must be a non-empty string", "InvalidRequest")
 
     if params is None:
         params = {}
 
     fn = _METHODS.get(method)
     if fn is None:
-        return _jsonrpc_error(_id, -32601, f"Method not found: {method}")
+        return _err_std(_id, -32601, f"Method not found: {method}", "MethodNotFound", {"method": method})
 
     try:
         return fn(_id, params)
     except Exception as e:
         # If we know the reason, methods should return a specific error already.
-        return _jsonrpc_error(_id, -32099, f"Internal error: {e}")
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
 
 
 def _handle_line(sock, raw_line):
@@ -607,7 +724,7 @@ def _handle_line(sock, raw_line):
     try:
         req = json.loads(raw_line.decode("utf-8"))
     except Exception as e:
-        _send_obj(sock, _jsonrpc_error(None, -32700, f"Parse error: {e}"))
+        _send_obj(sock, _err_std(None, -32700, f"Parse error: {e}", "ParseError"))
         return
 
     # Notifications: if id is omitted -> no response
