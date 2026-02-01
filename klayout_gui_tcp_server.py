@@ -237,6 +237,48 @@ def _resolve_open_path(_id, path):
     return _resolve_cwd_path(_id, path)
 
 
+def _trans_to_dict(t: "pya.Trans"):
+    """Convert KLayout Trans to our JSON-friendly trans dict.
+
+    Note: angle is in units of 90 degrees in KLayout.
+    """
+    try:
+        disp = t.disp
+        x = int(disp.x)
+        y = int(disp.y)
+    except Exception:
+        x = 0
+        y = 0
+
+    try:
+        rot = int(t.angle) * 90
+    except Exception:
+        rot = 0
+
+    try:
+        mirror = bool(t.is_mirror())
+    except Exception:
+        try:
+            mirror = bool(t.mirror)
+        except Exception:
+            mirror = False
+
+    return {"x": x, "y": y, "rot": rot, "mirror": mirror}
+
+
+def _box_to_dict(b: "pya.Box"):
+    try:
+        return {"x1": int(b.left), "y1": int(b.bottom), "x2": int(b.right), "y2": int(b.top)}
+    except Exception:
+        # Fallback: try p1/p2.
+        try:
+            p1 = b.p1
+            p2 = b.p2
+            return {"x1": int(p1.x), "y1": int(p1.y), "x2": int(p2.x), "y2": int(p2.y)}
+        except Exception:
+            return None
+
+
 # -----------------------------------------------------------------------------
 # Method handlers (spec v0)
 # -----------------------------------------------------------------------------
@@ -773,6 +815,225 @@ def _m_layout_get_hierarchy_depth(_id, params):
     )
 
 
+# -----------------------------------------------------------------------------
+# Hierarchy queries (Req6)
+# -----------------------------------------------------------------------------
+
+
+def _m_hier_query_down(_id, params):
+    """需求6-1: query instances downward from a given root cell.
+
+    Supports structural mode first:
+    - Each Instance object (including arrays) is reported as ONE record.
+    - Array properties (nx/ny/a/b etc.) are included; expansion is a later step.
+
+    Bounding box:
+    - bbox is computed as DEEP bbox (includes child hierarchy) over ALL layers.
+
+    Result limiting (IMPORTANT DESIGN NOTE):
+    - This API can easily produce huge outputs (deep hierarchies, arrays, etc.).
+    - To keep the server responsive and avoid memory/time blowups, we enforce a
+      hard maximum number of returned records. This is a "guardrail" design
+      choice, not necessarily an indication that typical designs are risky.
+    - If the limit would be exceeded, we return a clear TooManyResults error.
+
+    Params:
+      cell: string (required)
+      depth: int >= 0 (required)
+      mode: "structural" | "expanded" (default: structural; expanded not yet implemented)
+      limit: int (default: 10000)
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    root = params.get("cell", None)
+    depth = params.get("depth", None)
+    mode = params.get("mode", "structural")
+    limit = params.get("limit", 10000)
+
+    if not isinstance(root, str) or not root:
+        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+
+    if not isinstance(depth, int) or depth < 0:
+        return _err_std(_id, -32602, "Invalid params: depth must be int >= 0", "InvalidParams", {"field": "depth"})
+
+    if mode not in ("structural", "expanded"):
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: mode must be 'structural' or 'expanded'",
+            "InvalidParams",
+            {"field": "mode", "allowed": ["structural", "expanded"], "got": mode},
+        )
+
+    if mode == "expanded":
+        return _err(
+            _id,
+            -32040,
+            "Not implemented: mode='expanded' is not implemented yet (use mode='structural')",
+            "NotImplemented",
+        )
+
+    if not isinstance(limit, int) or limit < 1:
+        return _err_std(_id, -32602, "Invalid params: limit must be int >= 1", "InvalidParams", {"field": "limit"})
+
+    if not _STATE.layout.has_cell(root):
+        return _err(_id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root})
+
+    results = []
+
+    def push_record(rec):
+        # Enforce result limit as a guardrail.
+        if len(results) >= limit:
+            return _err(
+                _id,
+                -32030,
+                (
+                    f"Too many results: hier.query_down would return more than {limit} instance records "
+                    "(safety limit). Reduce depth or narrow the query."
+                ),
+                "TooManyResults",
+                {"limit": int(limit), "got_so_far": int(len(results) + 1), "depth": int(depth), "mode": mode, "root": root},
+            )
+        results.append(rec)
+        return None
+
+    def inst_kind_and_array(inst):
+        # Detect regular array vs single instance using the underlying CellInstArray.
+        try:
+            cia = inst.cell_inst
+        except Exception:
+            try:
+                cia = inst.cell_inst_()
+            except Exception:
+                cia = None
+
+        if cia is None:
+            return "single", None, None
+
+        try:
+            is_array = bool(cia.is_regular_array())
+        except Exception:
+            # KLayout Python should provide is_regular_array() method.
+            is_array = False
+
+        if not is_array:
+            return "single", cia, None
+
+        try:
+            nx = int(cia.na)
+            ny = int(cia.nb)
+        except Exception:
+            nx = None
+            ny = None
+
+        try:
+            a = cia.a
+            b = cia.b
+            ax, ay = int(a.x), int(a.y)
+            bx, by = int(b.x), int(b.y)
+        except Exception:
+            ax = ay = bx = by = None
+
+        arr = {"nx": nx, "ny": ny, "a": {"x": ax, "y": ay}, "b": {"x": bx, "y": by}}
+        # Provide dx/dy when it matches our current simplified array model.
+        if ay == 0 and bx == 0 and ax is not None and by is not None:
+            arr["dx"] = ax
+            arr["dy"] = by
+
+        return "array", cia, arr
+
+    def inst_trans(inst, cia):
+        # Use CellInstArray#trans (first element) to get a simple Trans.
+        try:
+            t = cia.trans
+        except Exception:
+            try:
+                t = inst.trans
+            except Exception:
+                t = None
+        if t is None:
+            return {"x": 0, "y": 0, "rot": 0, "mirror": False}
+        return _trans_to_dict(t)
+
+    def inst_bbox(inst):
+        # Deep bbox over all layers.
+        try:
+            b = inst.bbox()
+        except Exception:
+            try:
+                b = inst.bbox
+            except Exception:
+                b = None
+        return _box_to_dict(b)
+
+    def dfs(cell_obj, depth_left, path_cells):
+        if depth_left <= 0:
+            return None
+        try:
+            it = cell_obj.each_inst()
+        except Exception as e:
+            return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+        for inst in it:
+            try:
+                child_cell = inst.cell
+            except Exception:
+                try:
+                    child_cell = inst.cell_()
+                except Exception:
+                    child_cell = None
+
+            if child_cell is None:
+                continue
+
+            kind, cia, arr = inst_kind_and_array(inst)
+            tdict = inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False}
+            bbox = inst_bbox(inst)
+
+            rec = {
+                "kind": kind,
+                "parent_cell": cell_obj.name,
+                "child_cell": child_cell.name,
+                "trans": tdict,
+                "array": arr,
+                "path": list(path_cells),
+                "bbox": bbox,
+            }
+
+            err2 = push_record(rec)
+            if err2:
+                return err2
+
+            # Recurse
+            err3 = dfs(child_cell, depth_left - 1, path_cells + [child_cell.name])
+            if err3:
+                return err3
+
+        return None
+
+    root_cell_obj = _STATE.layout.cell(root)
+    err4 = dfs(root_cell_obj, depth, [root])
+    if err4:
+        return err4
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "root": root,
+            "depth": int(depth),
+            "mode": mode,
+            "limit": int(limit),
+            "instances": results,
+        },
+    )
+
+
 def _req3_parent_child_cells(_id, params):
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
@@ -984,6 +1245,8 @@ _METHODS.update(
         "layout.get_dbu": _m_layout_get_dbu,
         "layout.get_cells": _m_layout_get_cells,
         "layout.get_hierarchy_depth": _m_layout_get_hierarchy_depth,
+
+        "hier.query_down": _m_hier_query_down,
     }
 )
 
