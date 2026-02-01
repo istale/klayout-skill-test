@@ -196,7 +196,14 @@ def _layer_index_from_params(layout, params, _id):
     )
 
 
-def _resolve_export_path(_id, path):
+def _resolve_cwd_path(_id, path):
+    """Resolve a file path under server cwd.
+
+    Accepts relative paths (interpreted relative to server cwd) and absolute
+    paths (must still be within server cwd).
+
+    Returns: ({"rel": <original>, "abs": <realpath>}, error)
+    """
     if not isinstance(path, str) or not path:
         return None, _err_std(_id, -32602, "Invalid params: path must be a non-empty string", "InvalidParams", {"field": "path"})
 
@@ -218,6 +225,16 @@ def _resolve_export_path(_id, path):
         )
 
     return {"rel": path, "abs": full_real}, None
+
+
+def _resolve_export_path(_id, path):
+    # Backward-compatible alias.
+    return _resolve_cwd_path(_id, path)
+
+
+def _resolve_open_path(_id, path):
+    # Same restrictions as export.
+    return _resolve_cwd_path(_id, path)
 
 
 # -----------------------------------------------------------------------------
@@ -481,6 +498,88 @@ def _m_layout_export(_id, params):
     return _jsonrpc_result(_id, {"written": True, "path": resolved["rel"]})
 
 
+def _m_layout_open(_id, params):
+    """需求4-2: open a layout file in KLayout and switch active server layout.
+
+    Params:
+      path: string, required, under server cwd
+      mode: 0|1|2 (default 0) - passed to MainWindow.load_layout
+    """
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    path = params.get("path", None)
+    mode = params.get("mode", 0)
+
+    if not isinstance(mode, int) or mode not in (0, 1, 2):
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: mode must be 0, 1, or 2",
+            "InvalidParams",
+            {"field": "mode", "allowed": [0, 1, 2], "got": mode},
+        )
+
+    resolved, perr = _resolve_open_path(_id, path)
+    if perr:
+        return perr
+
+    if not os.path.exists(resolved["abs"]):
+        return _err(_id, -32012, f"File not found: {resolved['rel']}", "FileNotFound", {"path": resolved["rel"]})
+
+    app = pya.Application.instance()
+    mw = None
+    try:
+        mw = app.main_window()
+    except Exception:
+        mw = None
+
+    if mw is None:
+        return _err(_id, -32013, "MainWindow not available: cannot open layout", "MainWindowUnavailable")
+
+    try:
+        cv = mw.load_layout(resolved["abs"], int(mode))
+        layout = cv.layout()
+    except Exception as e:
+        return _err(_id, -32014, f"Failed to open layout: {e}", "OpenFailed")
+
+    if layout is None:
+        return _err(_id, -32014, "Failed to open layout: no layout returned", "OpenFailed")
+
+    # Switch server state to this layout.
+    _STATE.layout = layout
+    _STATE.layout_id = "L1"
+    _STATE.current_layer_index = None
+
+    top_cell = None
+    try:
+        top_cell = layout.top_cell()
+    except Exception:
+        top_cell = None
+
+    if top_cell is None:
+        try:
+            tops = layout.top_cells()
+            if tops and len(tops) > 0:
+                top_cell = tops[0]
+        except Exception:
+            top_cell = None
+
+    _STATE.top_cell = top_cell
+    _STATE.top_cell_name = top_cell.name if top_cell is not None else None
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "opened": True,
+            "path": resolved["rel"],
+            "mode": int(mode),
+            "top_cell": _STATE.top_cell_name,
+        },
+    )
+
+
 def _req3_parent_child_cells(_id, params):
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
@@ -685,6 +784,7 @@ _METHODS.update(
         "cell.create": _m_cell_create,
         "instance.create": _m_instance_create,
         "instance_array.create": _m_instance_array_create,
+        "layout.open": _m_layout_open,
     }
 )
 
