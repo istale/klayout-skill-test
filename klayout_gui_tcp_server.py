@@ -113,6 +113,28 @@ def _jsonrpc_result(_id, result):
     return {"jsonrpc": "2.0", "id": _id, "result": result}
 
 
+def _guardrail_too_many_results(_id, kind: str, limit: int, got_so_far: int, message: str, data: dict | None = None):
+    """Guardrail helper.
+
+    'Guardrail' here means an intentional safety limit to prevent accidental
+    blow-ups (huge JSON responses, memory pressure, UI stalls) when querying
+    deep hierarchies or expanded arrays.
+
+    This is a design choice and not necessarily an indication that typical
+    layouts are risky.
+    """
+    payload = {"type": "TooManyResults", "kind": str(kind), "limit": int(limit), "got_so_far": int(got_so_far)}
+    if isinstance(data, dict):
+        payload.update(data)
+    return _err(
+        _id,
+        -32030,
+        message,
+        "TooManyResults",
+        payload,
+    )
+
+
 def _require_active_layout(_id):
     if _STATE.layout is None:
         return _err(_id, -32001, "No active layout: call layout.new first", "NoActiveLayout")
@@ -888,15 +910,16 @@ def _m_hier_query_up_paths(_id, params):
 
     def push_path(seg):
         if len(paths) >= max_paths:
-            return _err(
+            return _guardrail_too_many_results(
                 _id,
-                -32030,
+                "paths",
+                max_paths,
+                len(paths) + 1,
                 (
                     f"Too many results: hier.query_up_paths would return more than {max_paths} paths "
                     "(safety limit). Narrow the query or reduce max_paths."
                 ),
-                "TooManyResults",
-                {"limit": int(max_paths), "got_so_far": int(len(paths) + 1), "target": target},
+                {"target": target, "method": "hier.query_up_paths"},
             )
         paths.append(seg)
         return None
@@ -1054,15 +1077,16 @@ def _m_hier_query_down(_id, params):
     def push_record(rec):
         # Enforce result limit as a guardrail.
         if len(results) >= limit:
-            return _err(
+            return _guardrail_too_many_results(
                 _id,
-                -32030,
+                "instance_records",
+                limit,
+                len(results) + 1,
                 (
                     f"Too many results: hier.query_down would return more than {limit} instance records "
-                    "(safety limit). Reduce depth or narrow the query."
+                    "(safety limit). Reduce depth, switch to structural mode, or narrow the query."
                 ),
-                "TooManyResults",
-                {"limit": int(limit), "got_so_far": int(len(results) + 1), "depth": int(depth), "mode": mode, "root": root},
+                {"depth": int(depth), "mode": mode, "root": root, "method": "hier.query_down"},
             )
         results.append(rec)
         return None
@@ -1182,14 +1206,20 @@ def _m_hier_query_down(_id, params):
                 t = cia.trans
                 cb = deep_bbox_cell(child)
                 if cb is not None:
-                    tb = cb.transformed(t)
-                    if b is None:
-                        b = tb
-                    else:
-                        b = b + tb
+                    try:
+                        tb = cb.transformed(t)
+                    except Exception:
+                        tb = None
+                    if tb is not None:
+                        if b is None:
+                            b = tb
+                        else:
+                            b = b + tb
             else:
-                # For arrays, bbox of the array in this cell is available and already deep
-                # via Instance#bbox. This is correct and fast.
+                # For arrays, Instance#bbox already reports the overall extension
+                # of the *array* in the parent cell, including hierarchy below the
+                # child cell (deep). Using Instance#bbox here is both correct and
+                # significantly faster than expanding the array.
                 ib = inst_bbox(inst)
                 if ib is not None:
                     if b is None:
@@ -1278,6 +1308,10 @@ def _m_hier_query_down(_id, params):
                             except Exception:
                                 bbox_elem = None
 
+                        # In expanded mode, each returned record represents ONE
+                        # physical element of the original array instance.
+                        # - kind='single' means this record is a single element.
+                        # - array field carries the *origin array instance* metadata.
                         rec = {
                             "kind": "single",
                             "parent_cell": cell_obj.name,
