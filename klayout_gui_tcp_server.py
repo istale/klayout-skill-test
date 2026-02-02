@@ -981,11 +981,11 @@ def _m_hier_query_up_paths(_id, params):
 
 
 def _m_hier_query_down(_id, params):
-    """需求6-1: query instances downward from a given root cell.
+    """需求6-3: query instances downward from a given root cell.
 
-    Supports structural mode first:
-    - Each Instance object (including arrays) is reported as ONE record.
-    - Array properties (nx/ny/a/b etc.) are included; expansion is a later step.
+    Modes:
+    - structural: each Instance object (including arrays) is reported as ONE record.
+    - expanded: regular arrays are expanded into per-element records.
 
     Bounding box:
     - bbox is computed as DEEP bbox (includes child hierarchy) over ALL layers.
@@ -995,12 +995,13 @@ def _m_hier_query_down(_id, params):
     - To keep the server responsive and avoid memory/time blowups, we enforce a
       hard maximum number of returned records. This is a "guardrail" design
       choice, not necessarily an indication that typical designs are risky.
-    - If the limit would be exceeded, we return a clear TooManyResults error.
+    - If the limit would be exceeded, we return a clear TooManyResults error with
+      a message that explains *what* safety limit was hit and *how* to mitigate.
 
     Params:
       cell: string (required)
       depth: int >= 0 (required)
-      mode: "structural" | "expanded" (default: structural; expanded not yet implemented)
+      mode: "structural" | "expanded" (default: structural)
       limit: int (default: 10000)
     """
     err = _require_active_layout(_id)
@@ -1031,13 +1032,7 @@ def _m_hier_query_down(_id, params):
             {"field": "mode", "allowed": ["structural", "expanded"], "got": mode},
         )
 
-    if mode == "expanded":
-        return _err(
-            _id,
-            -32040,
-            "Not implemented: mode='expanded' is not implemented yet (use mode='structural')",
-            "NotImplemented",
-        )
+    # mode='expanded' is supported (arrays expand into per-element records)
 
     if not isinstance(limit, int) or limit < 1:
         return _err_std(_id, -32602, "Invalid params: limit must be int >= 1", "InvalidParams", {"field": "limit"})
@@ -1085,12 +1080,8 @@ def _m_hier_query_down(_id, params):
         if not is_array:
             return "single", cia, None
 
-        try:
-            nx = int(cia.na)
-            ny = int(cia.nb)
-        except Exception:
-            nx = None
-            ny = None
+        nx = int(getattr(cia, "na", 0))
+        ny = int(getattr(cia, "nb", 0))
 
         try:
             a = cia.a
@@ -1130,7 +1121,75 @@ def _m_hier_query_down(_id, params):
                 b = inst.bbox
             except Exception:
                 b = None
-        return _box_to_dict(b)
+        return b
+
+    # Memoized deep bbox for child cells (used for expanded arrays)
+    _deep_bbox_memo = {}
+
+    def deep_bbox_cell(cell_obj):
+        """Compute a deep bbox (all layers) for a cell.
+
+        We memoize per cell_index to keep expanded mode efficient.
+        """
+        try:
+            key = int(cell_obj.cell_index())
+        except Exception:
+            key = id(cell_obj)
+
+        if key in _deep_bbox_memo:
+            return _deep_bbox_memo[key]
+
+        # Start with the cell's own bbox.
+        try:
+            b = cell_obj.bbox()
+        except Exception:
+            try:
+                b = cell_obj.bbox
+            except Exception:
+                b = None
+
+        # Expand bbox with children's deep bboxes via instances.
+        try:
+            it = cell_obj.each_inst()
+        except Exception:
+            it = []
+
+        for inst in it:
+            try:
+                child = inst.cell
+            except Exception:
+                try:
+                    child = inst.cell_()
+                except Exception:
+                    child = None
+            if child is None:
+                continue
+
+            kind, cia, _arr = inst_kind_and_array(inst)
+            if cia is None:
+                continue
+
+            if kind == "single":
+                t = cia.trans
+                cb = deep_bbox_cell(child)
+                if cb is not None:
+                    tb = cb.transformed(t)
+                    if b is None:
+                        b = tb
+                    else:
+                        b = b + tb
+            else:
+                # For arrays, bbox of the array in this cell is available and already deep
+                # via Instance#bbox. This is correct and fast.
+                ib = inst_bbox(inst)
+                if ib is not None:
+                    if b is None:
+                        b = ib
+                    else:
+                        b = b + ib
+
+        _deep_bbox_memo[key] = b
+        return b
 
     def dfs(cell_obj, depth_left, path_cells):
         if depth_left <= 0:
@@ -1153,22 +1212,77 @@ def _m_hier_query_down(_id, params):
                 continue
 
             kind, cia, arr = inst_kind_and_array(inst)
-            tdict = inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False}
-            bbox = inst_bbox(inst)
 
-            rec = {
-                "kind": kind,
-                "parent_cell": cell_obj.name,
-                "child_cell": child_cell.name,
-                "trans": tdict,
-                "array": arr,
-                "path": list(path_cells),
-                "bbox": bbox,
-            }
+            if mode == "structural" or kind == "single":
+                tdict = inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False}
+                bbox = _box_to_dict(inst_bbox(inst))
 
-            err2 = push_record(rec)
-            if err2:
-                return err2
+                rec = {
+                    "kind": kind,
+                    "parent_cell": cell_obj.name,
+                    "child_cell": child_cell.name,
+                    "trans": tdict,
+                    "array": arr,
+                    "path": list(path_cells),
+                    "bbox": bbox,
+                }
+
+                err2 = push_record(rec)
+                if err2:
+                    return err2
+
+            else:
+                # Expanded mode: expand regular arrays to per-element records.
+                # For each element we compute:
+                # - element Trans = base trans + ix*a + iy*b
+                # - element bbox = deep_bbox(child_cell).transformed(element_trans)
+                cb = deep_bbox_cell(child_cell)
+                if cb is None:
+                    # Empty child: still emit records with null bbox
+                    cb = None
+
+                try:
+                    base_t = cia.trans
+                except Exception:
+                    base_t = None
+
+                a = cia.a
+                b = cia.b
+                nx = int(cia.na)
+                ny = int(cia.nb)
+
+                for iy in range(ny):
+                    for ix in range(nx):
+                        dx = int(a.x) * ix + int(b.x) * iy
+                        dy = int(a.y) * ix + int(b.y) * iy
+
+                        if base_t is None:
+                            t_elem = pya.Trans(0, False, dx, dy)
+                        else:
+                            # Create from base + additional displacement.
+                            t_elem = pya.Trans(base_t, dx, dy)
+
+                        bbox_elem = None
+                        if cb is not None:
+                            try:
+                                bbox_elem = cb.transformed(t_elem)
+                            except Exception:
+                                bbox_elem = None
+
+                        rec = {
+                            "kind": "single",
+                            "parent_cell": cell_obj.name,
+                            "child_cell": child_cell.name,
+                            "trans": _trans_to_dict(t_elem),
+                            "array": arr,
+                            "expanded_index": {"ix": int(ix), "iy": int(iy)},
+                            "path": list(path_cells),
+                            "bbox": _box_to_dict(bbox_elem),
+                        }
+
+                        err2 = push_record(rec)
+                        if err2:
+                            return err2
 
             # Recurse
             err3 = dfs(child_cell, depth_left - 1, path_cells + [child_cell.name])
