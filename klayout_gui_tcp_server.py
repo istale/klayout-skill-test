@@ -39,6 +39,7 @@ class SessionState:
     def __init__(self):
         self.layout = None               # pya.Layout
         self.layout_id = None            # string (v0 uses "L1")
+        self.layout_filename = None      # string | None (best-effort source filename)
         self.top_cell = None             # pya.Cell
         self.top_cell_name = None        # string
         self.current_layer_index = None  # int
@@ -343,6 +344,7 @@ def _m_layout_new(_id, params):
 
     _STATE.layout = layout
     _STATE.layout_id = "L1"
+    _STATE.layout_filename = None
     _STATE.top_cell = top_cell
     _STATE.top_cell_name = top_cell_name
     _STATE.current_layer_index = None
@@ -592,6 +594,7 @@ def _m_layout_open(_id, params):
     # Switch server state to this layout.
     _STATE.layout = layout
     _STATE.layout_id = "L1"
+    _STATE.layout_filename = resolved["rel"]
     _STATE.current_layer_index = None
 
     top_cell = None
@@ -818,6 +821,163 @@ def _m_layout_get_hierarchy_depth(_id, params):
 # -----------------------------------------------------------------------------
 # Hierarchy queries (Req6)
 # -----------------------------------------------------------------------------
+
+
+def _m_hier_query_up_paths(_id, params):
+    """需求6-2: query parent paths (from the single top cell) to a target cell.
+
+    Output format:
+    - Returns paths as **segments** (list of strings), similar to filesystem
+      components: [gds_filename, top_cell, ..., target_cell].
+
+    Important constraints:
+    - If the layout has multiple top cells, we return an error (per spec).
+
+    Guardrail (IMPORTANT DESIGN NOTE):
+    - The number of distinct paths can grow quickly with branching.
+    - We enforce a max_paths limit (default 10000). If exceeded, we return
+      TooManyResults with a clear message.
+
+    Params:
+      cell: string (required)
+      max_paths: int (default 10000)
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    target = params.get("cell", None)
+    max_paths = params.get("max_paths", 10000)
+
+    if not isinstance(target, str) or not target:
+        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+
+    if not isinstance(max_paths, int) or max_paths < 1:
+        return _err_std(_id, -32602, "Invalid params: max_paths must be int >= 1", "InvalidParams", {"field": "max_paths"})
+
+    if not _STATE.layout.has_cell(target):
+        return _err(_id, -32000, f"Cell not found: {target}", "CellNotFound", {"name": target})
+
+    # Enforce single top cell
+    try:
+        tops = _STATE.layout.top_cells()
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+    if not tops or len(tops) == 0:
+        return _err(_id, -32020, "No top cell in layout", "NoTopCell")
+
+    if len(tops) != 1:
+        return _err(
+            _id,
+            -32021,
+            f"Multiple top cells in layout: {len(tops)}",
+            "MultipleTopCells",
+            {"count": int(len(tops)), "names": [c.name for c in tops]},
+        )
+
+    top = tops[0]
+
+    gds_name = _STATE.layout_filename if _STATE.layout_filename else "<in-memory>"
+
+    paths = []
+
+    def push_path(seg):
+        if len(paths) >= max_paths:
+            return _err(
+                _id,
+                -32030,
+                (
+                    f"Too many results: hier.query_up_paths would return more than {max_paths} paths "
+                    "(safety limit). Narrow the query or reduce max_paths."
+                ),
+                "TooManyResults",
+                {"limit": int(max_paths), "got_so_far": int(len(paths) + 1), "target": target},
+            )
+        paths.append(seg)
+        return None
+
+    memo = {}
+
+    def cell_key(cell):
+        try:
+            return int(cell.cell_index())
+        except Exception:
+            try:
+                return int(cell.cell_index)
+            except Exception:
+                return id(cell)
+
+    def dfs(cell_obj, segs, stack):
+        # segs includes [gds_name, top, ... current cell]
+        ck = cell_key(cell_obj)
+        if ck in stack:
+            return None
+
+        # Memoize by (cell, remaining?) isn't straightforward because we need all paths.
+        # We only use memo to avoid revisiting subgraphs when target isn't reachable.
+        if ck in memo and memo[ck] is False:
+            return None
+
+        stack.add(ck)
+
+        found_any = False
+        if cell_obj.name == target:
+            err2 = push_path(list(segs))
+            stack.remove(ck)
+            if err2:
+                return err2
+            return None
+
+        try:
+            it = cell_obj.each_inst()
+        except Exception:
+            it = []
+
+        for inst in it:
+            try:
+                child = inst.cell
+            except Exception:
+                try:
+                    child = inst.cell_()
+                except Exception:
+                    child = None
+            if child is None:
+                continue
+
+            err3 = dfs(child, segs + [child.name], stack)
+            if err3:
+                stack.remove(ck)
+                return err3
+            # We can't easily know if child found; so we set found_any optimistically if target matches.
+            if child.name == target:
+                found_any = True
+
+        stack.remove(ck)
+        # If we didn't find target directly in this cell or its descendants (best-effort), mark as no-path.
+        if not found_any and cell_obj.name != target:
+            # Conservative: do not mark False if there might be deeper paths; leave memo unset.
+            pass
+        return None
+
+    err4 = dfs(top, [gds_name, top.name], set())
+    if err4:
+        return err4
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "cell": target,
+            "max_paths": int(max_paths),
+            "path_format": "segments",
+            "paths": paths,
+        },
+    )
+
 
 
 def _m_hier_query_down(_id, params):
@@ -1247,6 +1407,7 @@ _METHODS.update(
         "layout.get_hierarchy_depth": _m_layout_get_hierarchy_depth,
 
         "hier.query_down": _m_hier_query_down,
+        "hier.query_up_paths": _m_hier_query_up_paths,
     }
 )
 
