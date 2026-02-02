@@ -1,0 +1,10 @@
+項目,Req6-1（hier.query_down 結構模式 structural）,Req6-2（hier.query_up_paths）,Req6-3（hier.query_down 展開模式 expanded）,Req6-4（提案）
+主要用途,"從指定 root cell 往下查 instances（依 depth），array 不展開","從唯一 TOP 出發，回傳到目標 cell 的路徑（segments）","從指定 root cell 往下查 instances（依 depth），regular array 會展開成每顆 element","把 hierarchy 用於 debug/分析：詳細路徑 + 直接 parents/children 查詢"
+方向,向下,向上（從 TOP）,向下,"向上 + 本地查詢（parents/children）"
+Array 處理,"array instance 只回 1 筆 record","路徑遍歷只看到 edge（不提供每顆 array element）","regular array 會展開為每顆 element record，附 expanded_index","提案同時支援：路徑上每段 edge 的詳細資訊，並可選擇展開版"
+回傳主體,instances[] records,paths[]（segments）,instances[] records（expanded）,paths[] + edge 詳細資訊；另提供 parents[]/children[] 方便查詢
+Path 資訊,"每筆 instance record 都帶 path（segments），表示它位於哪個 parent chain 下","每條 path 是 segments=[GDS檔名, TOP, ..., target]","每筆 record 都帶 path（segments）","每條 path 除了 segments，還要回每一段 edge 的 instance descriptor（trans/array/bbox 等）"
+BBox,"deep bbox（all layers）每筆 instance record 都回","不包含 bbox","deep bbox（all layers）每顆展開 element record 都回","必須包含 bbox；尤其用在 edge 詳細資訊與 parents/children 查詢"
+TooManyResults（保護欄杆）,limit（預設 10k）超過→回 error TooManyResults,max_paths（預設 10k）超過→回 error TooManyResults,limit（預設 10k）超過→回 error TooManyResults,"同樣需要 max_paths/limit 的 guardrail；錯誤訊息/註解需清楚說明踩到哪個 safety limit 與如何縮小查詢"
+多 Top Cell,不需要（root 由參數指定）,多/無 top cell → 一律 error,不需要（root 由參數指定）,從 TOP 出發的查詢維持一律 error；本地查詢（parents/children）是否也要 error 需再定
+能回答的典型問題,"從這個 cell 出發，N 層內我 instantiate 了什麼？","這個 cell 在 TOP hierarchy 的哪些路徑下被使用？","在展開 array 後，我在這個 root 下總共有多少『實際 instance 元素』（受 limit 限制）？","我需要看到『每條路徑每一段的 trans/array/bbox』來 debug；以及『誰是我的直接 parents/children』"
