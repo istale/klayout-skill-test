@@ -901,7 +901,7 @@ def _m_hier_query_up_paths(_id, params):
         paths.append(seg)
         return None
 
-    memo = {}
+    memo_reachable = {}
 
     def cell_key(cell):
         try:
@@ -913,25 +913,35 @@ def _m_hier_query_up_paths(_id, params):
                 return id(cell)
 
     def dfs(cell_obj, segs, stack):
-        # segs includes [gds_name, top, ... current cell]
+        """Depth-first traversal.
+
+        Returns:
+          (reachable, err)
+          - reachable: bool, whether target is reachable from this node
+          - err: JSON-RPC error object if we hit TooManyResults etc.
+
+        NOTE: We return reachability explicitly so that path enumeration remains
+        correct for deep targets (not just direct children).
+        """
         ck = cell_key(cell_obj)
         if ck in stack:
-            return None
+            # Cycle protection (shouldn't happen in valid GDS hierarchy)
+            return False, None
 
-        # Memoize by (cell, remaining?) isn't straightforward because we need all paths.
-        # We only use memo to avoid revisiting subgraphs when target isn't reachable.
-        if ck in memo and memo[ck] is False:
-            return None
+        if ck in memo_reachable:
+            return bool(memo_reachable[ck]), None
 
         stack.add(ck)
 
-        found_any = False
         if cell_obj.name == target:
             err2 = push_path(list(segs))
             stack.remove(ck)
             if err2:
-                return err2
-            return None
+                return True, err2
+            memo_reachable[ck] = True
+            return True, None
+
+        reachable = False
 
         try:
             it = cell_obj.each_inst()
@@ -949,24 +959,23 @@ def _m_hier_query_up_paths(_id, params):
             if child is None:
                 continue
 
-            err3 = dfs(child, segs + [child.name], stack)
+            child_reach, err3 = dfs(child, segs + [child.name], stack)
             if err3:
                 stack.remove(ck)
-                return err3
-            # We can't easily know if child found; so we set found_any optimistically if target matches.
-            if child.name == target:
-                found_any = True
+                return True, err3
+            if child_reach:
+                reachable = True
 
         stack.remove(ck)
-        # If we didn't find target directly in this cell or its descendants (best-effort), mark as no-path.
-        if not found_any and cell_obj.name != target:
-            # Conservative: do not mark False if there might be deeper paths; leave memo unset.
-            pass
-        return None
+        memo_reachable[ck] = bool(reachable)
+        return bool(reachable), None
 
-    err4 = dfs(top, [gds_name, top.name], set())
+    reachable, err4 = dfs(top, [gds_name, top.name], set())
     if err4:
         return err4
+
+    # reachable is not currently returned; paths list is the primary output.
+    # It can be used later for fast "no-path" detection.
 
     return _jsonrpc_result(
         _id,
