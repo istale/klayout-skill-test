@@ -4,3 +4,6 @@ klayout-python/references/docs_html/
 klayout-python/references/docs_md/
 __pycache__/
 *.pyc
+
+# Generated / demo outputs
+*.gds
