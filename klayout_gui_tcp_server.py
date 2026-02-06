@@ -1562,16 +1562,24 @@ def _maybe_call(x):
 
 
 def _inst_path_to_cell_names(inst_path):
-    """Convert InstancePath -> [cell_name, ...] (best-effort)."""
+    """Convert InstancePath -> [cell_name, ...] (best-effort).
+
+    In KLayout Python, elements in inst_path typically expose `.cell` directly
+    (see reference script: `inst.cell.name`). Some bindings may expose `.inst`.
+    We support both.
+    """
     names = []
     try:
         for el in inst_path or []:
-            inst = _maybe_call(getattr(el, "inst", None))
-            if inst is None:
-                continue
-            c = _maybe_call(getattr(inst, "cell", None))
+            # Preferred: el.cell
+            c = _maybe_call(getattr(el, "cell", None))
             if c is None:
-                c = _maybe_call(getattr(inst, "cell_", None))
+                # Fallback: el.inst.cell
+                inst = _maybe_call(getattr(el, "inst", None))
+                if inst is not None:
+                    c = _maybe_call(getattr(inst, "cell", None))
+                    if c is None:
+                        c = _maybe_call(getattr(inst, "cell_", None))
             if c is None:
                 continue
             nm = _maybe_call(getattr(c, "name", None))
