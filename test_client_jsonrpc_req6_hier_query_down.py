@@ -144,7 +144,7 @@ def main() -> int:
     _id += 1
 
     # Query down from TOP depth=1
-    r = rpc(s, _id, "hier.query_down", {"cell": "TOP", "depth": 1}, verbose)
+    r = rpc(s, _id, "hier.query_down", {"cell": "TOP", "depth": 1, "include_bbox": True}, verbose)
     assert_result(r)
     insts = r["result"].get("instances")
     if not isinstance(insts, list) or len(insts) != 2:
@@ -161,7 +161,13 @@ def main() -> int:
     _id += 1
 
     # Limit exceeded -> TooManyResults
-    r = rpc(s, _id, "hier.query_down", {"cell": "TOP", "depth": 1, "limit": 1}, verbose)
+    r = rpc(
+        s,
+        _id,
+        "hier.query_down",
+        {"cell": "TOP", "depth": 1, "max_results": 1, "include_bbox": True},
+        verbose,
+    )
     assert_error_type(r, "TooManyResults", "Too many results")
 
     s.close()

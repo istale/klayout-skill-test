@@ -210,12 +210,24 @@ def main() -> int:
     next_id = build_deep_layout(s, verbose)
 
     # Small limit should error with TooManyResults and clear message
-    r = rpc(s, next_id, "hier.query_down", {"cell": "TOP", "depth": 5, "limit": 100}, verbose)
+    r = rpc(
+        s,
+        next_id,
+        "hier.query_down",
+        {"cell": "TOP", "depth": 5, "max_results": 100, "include_bbox": True},
+        verbose,
+    )
     assert_error(r, "TooManyResults", ["Too many results", "100", "safety limit"])
     next_id += 1
 
     # Default limit should succeed and return a non-trivial amount.
-    r = rpc(s, next_id, "hier.query_down", {"cell": "TOP", "depth": 5}, verbose)
+    r = rpc(
+        s,
+        next_id,
+        "hier.query_down",
+        {"cell": "TOP", "depth": 5, "include_bbox": True},
+        verbose,
+    )
     assert_result(r)
     insts = r["result"].get("instances")
     if not isinstance(insts, list) or len(insts) < 10:

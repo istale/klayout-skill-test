@@ -1034,7 +1034,14 @@ def _m_hier_query_down(_id, params):
       cell: string (required)
       depth: int >= 0 (required)
       mode: "structural" | "expanded" (default: structural)
-      limit: int (default: 10000)
+      include_bbox: bool (default: false)
+        - If false, bbox is NOT computed and is not returned.
+      max_results: int (default: 1000000)
+        - Safety guardrail. If the number of records would exceed this value,
+          returns TooManyResults.
+
+      Backward-compat:
+        - "limit" is accepted as an alias of max_results.
     """
     err = _require_active_layout(_id)
     if err:
@@ -1047,7 +1054,13 @@ def _m_hier_query_down(_id, params):
     root = params.get("cell", None)
     depth = params.get("depth", None)
     mode = params.get("mode", "structural")
-    limit = params.get("limit", 10000)
+
+    include_bbox = params.get("include_bbox", False)
+    max_results = params.get("max_results", None)
+
+    # Backward-compat alias
+    if max_results is None and "limit" in params:
+        max_results = params.get("limit")
 
     if not isinstance(root, str) or not root:
         return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
@@ -1066,8 +1079,26 @@ def _m_hier_query_down(_id, params):
 
     # mode='expanded' is supported (arrays expand into per-element records)
 
-    if not isinstance(limit, int) or limit < 1:
-        return _err_std(_id, -32602, "Invalid params: limit must be int >= 1", "InvalidParams", {"field": "limit"})
+    if not isinstance(include_bbox, bool):
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: include_bbox must be boolean",
+            "InvalidParams",
+            {"field": "include_bbox", "got": include_bbox},
+        )
+
+    if max_results is None:
+        max_results = 1_000_000
+
+    if not isinstance(max_results, int) or max_results < 1:
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: max_results must be int >= 1",
+            "InvalidParams",
+            {"field": "max_results", "got": max_results},
+        )
 
     if not _STATE.layout.has_cell(root):
         return _err(_id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root})
@@ -1076,17 +1107,23 @@ def _m_hier_query_down(_id, params):
 
     def push_record(rec):
         # Enforce result limit as a guardrail.
-        if len(results) >= limit:
+        if len(results) >= max_results:
             return _guardrail_too_many_results(
                 _id,
                 "instance_records",
-                limit,
+                int(max_results),
                 len(results) + 1,
                 (
-                    f"Too many results: hier.query_down would return more than {limit} instance records "
+                    f"Too many results: hier.query_down would return more than {max_results} instance records "
                     "(safety limit). Reduce depth, switch to structural mode, or narrow the query."
                 ),
-                {"depth": int(depth), "mode": mode, "root": root, "method": "hier.query_down"},
+                {
+                    "depth": int(depth),
+                    "mode": mode,
+                    "root": root,
+                    "method": "hier.query_down",
+                    "include_bbox": bool(include_bbox),
+                },
             )
         results.append(rec)
         return None
@@ -1157,11 +1194,13 @@ def _m_hier_query_down(_id, params):
         return b
 
     # Memoized deep bbox for child cells (used for expanded arrays)
+    # Only used when include_bbox=true.
     _deep_bbox_memo = {}
 
     def deep_bbox_cell(cell_obj):
         """Compute a deep bbox (all layers) for a cell.
 
+        Only used when include_bbox=true.
         We memoize per cell_index to keep expanded mode efficient.
         """
         try:
@@ -1254,7 +1293,6 @@ def _m_hier_query_down(_id, params):
 
             if mode == "structural" or kind == "single":
                 tdict = inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False}
-                bbox = _box_to_dict(inst_bbox(inst))
 
                 rec = {
                     "kind": kind,
@@ -1263,8 +1301,10 @@ def _m_hier_query_down(_id, params):
                     "trans": tdict,
                     "array": arr,
                     "path": list(path_cells),
-                    "bbox": bbox,
                 }
+
+                if include_bbox:
+                    rec["bbox"] = _box_to_dict(inst_bbox(inst))
 
                 err2 = push_record(rec)
                 if err2:
@@ -1275,10 +1315,12 @@ def _m_hier_query_down(_id, params):
                 # For each element we compute:
                 # - element Trans = base trans + ix*a + iy*b
                 # - element bbox = deep_bbox(child_cell).transformed(element_trans)
-                cb = deep_bbox_cell(child_cell)
-                if cb is None:
-                    # Empty child: still emit records with null bbox
-                    cb = None
+                #
+                # NOTE: bbox is optional. If include_bbox=false, we skip all bbox
+                # computations for speed.
+                cb = None
+                if include_bbox:
+                    cb = deep_bbox_cell(child_cell)
 
                 try:
                     base_t = cia.trans
@@ -1302,7 +1344,7 @@ def _m_hier_query_down(_id, params):
                             t_elem = pya.Trans(base_t, dx, dy)
 
                         bbox_elem = None
-                        if cb is not None:
+                        if include_bbox and cb is not None:
                             try:
                                 bbox_elem = cb.transformed(t_elem)
                             except Exception:
@@ -1320,8 +1362,9 @@ def _m_hier_query_down(_id, params):
                             "array": arr,
                             "expanded_index": {"ix": int(ix), "iy": int(iy)},
                             "path": list(path_cells),
-                            "bbox": _box_to_dict(bbox_elem),
                         }
+                        if include_bbox:
+                            rec["bbox"] = _box_to_dict(bbox_elem)
 
                         err2 = push_record(rec)
                         if err2:
@@ -1339,13 +1382,35 @@ def _m_hier_query_down(_id, params):
     if err4:
         return err4
 
+    def _sort_key(rec):
+        # Stable ordering for diffs/tests.
+        t = rec.get("trans") or {}
+        ei = rec.get("expanded_index") or {}
+        return (
+            str(rec.get("parent_cell", "")),
+            str(rec.get("child_cell", "")),
+            str(rec.get("kind", "")),
+            int(t.get("x", 0) or 0),
+            int(t.get("y", 0) or 0),
+            int(t.get("rot", 0) or 0),
+            bool(t.get("mirror", False)),
+            int(ei.get("ix", -1) or -1),
+            int(ei.get("iy", -1) or -1),
+        )
+
+    results.sort(key=_sort_key)
+
     return _jsonrpc_result(
         _id,
         {
             "root": root,
             "depth": int(depth),
             "mode": mode,
-            "limit": int(limit),
+            "include_bbox": bool(include_bbox),
+            "max_results": int(max_results),
+            # Backward-compat echo (deprecated)
+            "limit": int(max_results),
+            "dbu": float(_STATE.layout.dbu),
             "instances": results,
         },
     )
