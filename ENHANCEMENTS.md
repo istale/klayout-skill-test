@@ -31,3 +31,26 @@ Notes:
 - Avoid making this the default behavior of `layout.get_layers` to preserve
   deterministic behavior and performance.
 - Consider supporting both "defined" and "used" variants via an optional param.
+
+## Programmatic screenshots
+
+### Planned enhancement: headless / no-interaction screenshot export
+Current `view.screenshot` uses `MainWindow.current_view()` and fails with
+`NoCurrentView` in headless/no-interaction runs.
+
+Goal:
+- Support producing PNG output even when no GUI view is currently open.
+
+Implementation ideas:
+1) Create a `LayoutView` programmatically and attach/show the active layout
+   (`LayoutView.show_layout(...)`), optionally initializing layers.
+2) Set viewport to `zoom_fit` (or a target bbox) and export via
+   `save_image_with_options`.
+3) Consider a separate RPC method (to keep semantics clear):
+   - `layout.render_png` or `screenshot.render`
+
+Notes:
+- Needs careful handling of technology/layer properties if visual fidelity
+  matters.
+- In pure batch mode without Qt/GUI, this may still be impossible depending on
+  how KLayout was built; if so, document required run mode.
