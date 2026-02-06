@@ -822,22 +822,7 @@ def _m_view_screenshot(_id, params):
     _gui_refresh("pre-screenshot")
 
     # Apply viewport controls
-    try:
-        if viewport_mode == "fit":
-            view.zoom_fit()
-        elif viewport_mode == "box":
-            view.zoom_box(_make_dbox(_STATE.layout, units, box=box))
-        elif viewport_mode == "center_size":
-            view.zoom_box(_make_dbox(_STATE.layout, units, center=center, size=size))
-        else:
-            if steps > 0:
-                for _ in range(steps):
-                    view.zoom_in()
-            elif steps < 0:
-                for _ in range(-steps):
-                    view.zoom_out()
-    except Exception:
-        pass
+    _apply_viewport(view, _STATE.layout, viewport_mode, units, box, center, size, steps)
 
     try:
         # target=DBox() (empty) uses current/default
@@ -869,6 +854,106 @@ def _m_view_screenshot(_id, params):
             "path": resolved["rel"],
             "width": int(width),
             "height": int(height),
+            "viewport_mode": viewport_mode,
+            "units": units,
+        },
+    )
+
+
+
+def _apply_viewport(view, layout, viewport_mode, units, box, center, size, steps):
+    """Apply viewport controls to a LayoutView (best-effort)."""
+    try:
+        if viewport_mode == "fit":
+            view.zoom_fit()
+        elif viewport_mode == "box":
+            view.zoom_box(_make_dbox(layout, units, box=box))
+        elif viewport_mode == "center_size":
+            view.zoom_box(_make_dbox(layout, units, center=center, size=size))
+        else:
+            if steps > 0:
+                for _ in range(steps):
+                    view.zoom_in()
+            elif steps < 0:
+                for _ in range(-steps):
+                    view.zoom_out()
+    except Exception:
+        pass
+
+
+def _m_view_set_viewport(_id, params):
+    """只改視圖、不截圖：控制 GUI current_view 的 viewport。
+
+    Params:
+      viewport_mode: "fit" | "box" | "center_size" | "relative" (default: fit)
+      units: "um" | "dbu" (default: dbu)
+      box: [x1,y1,x2,y2] (required when viewport_mode=box)
+      center: [cx,cy] (required when viewport_mode=center_size)
+      size: [w,h] (required when viewport_mode=center_size)
+      steps: int (optional, used when viewport_mode=relative)
+
+    Requires:
+      - MainWindow + current_view
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    viewport_mode = params.get("viewport_mode", "fit")
+    units = params.get("units", "dbu")
+    box = params.get("box", None)
+    center = params.get("center", None)
+    size = params.get("size", None)
+    steps = params.get("steps", 0)
+
+    if viewport_mode not in ("fit", "box", "center_size", "relative"):
+        return _err_std(_id, -32602, "Invalid params: viewport_mode must be fit|box|center_size|relative", "InvalidParams", {"field": "viewport_mode", "got": viewport_mode})
+    if units not in ("um", "dbu"):
+        return _err_std(_id, -32602, "Invalid params: units must be um|dbu", "InvalidParams", {"field": "units", "got": units})
+
+    if viewport_mode == "box":
+        if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
+            return _err_std(_id, -32602, "Invalid params: box must be [x1,y1,x2,y2]", "InvalidParams", {"field": "box", "got": box})
+    if viewport_mode == "center_size":
+        if not (isinstance(center, list) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
+            return _err_std(_id, -32602, "Invalid params: center must be [cx,cy]", "InvalidParams", {"field": "center", "got": center})
+        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)):
+            return _err_std(_id, -32602, "Invalid params: size must be [w,h]", "InvalidParams", {"field": "size", "got": size})
+    if viewport_mode == "relative":
+        if not isinstance(steps, int):
+            return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
+
+    app = pya.Application.instance()
+    mw = None
+    try:
+        mw = app.main_window()
+    except Exception:
+        mw = None
+
+    if mw is None:
+        return _err(_id, -32013, "MainWindow not available: cannot set viewport", "MainWindowUnavailable")
+
+    view = None
+    try:
+        view = mw.current_view()
+    except Exception:
+        view = None
+
+    if view is None:
+        return _err(_id, -32016, "No current view: cannot set viewport", "NoCurrentView")
+
+    _gui_refresh("pre-viewport")
+    _apply_viewport(view, _STATE.layout, viewport_mode, units, box, center, size, steps)
+    _gui_refresh("post-viewport")
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "ok": True,
             "viewport_mode": viewport_mode,
             "units": units,
         },
@@ -967,22 +1052,7 @@ def _m_layout_render_png(_id, params):
         return _err(_id, -32099, f"Failed to show layout in view: {e}", "InternalError")
 
     # Apply viewport
-    try:
-        if viewport_mode == "fit":
-            view.zoom_fit()
-        elif viewport_mode == "box":
-            view.zoom_box(_make_dbox(_STATE.layout, units, box=box))
-        elif viewport_mode == "center_size":
-            view.zoom_box(_make_dbox(_STATE.layout, units, center=center, size=size))
-        else:
-            if steps > 0:
-                for _ in range(steps):
-                    view.zoom_in()
-            elif steps < 0:
-                for _ in range(-steps):
-                    view.zoom_out()
-    except Exception:
-        pass
+    _apply_viewport(view, _STATE.layout, viewport_mode, units, box, center, size, steps)
 
     # Render synchronously
     try:
@@ -2068,6 +2138,7 @@ _METHODS.update(
         "shape.create": _m_shape_create,
         "layout.export": _m_layout_export,
         "view.screenshot": _m_view_screenshot,
+        "view.set_viewport": _m_view_set_viewport,
         "layout.render_png": _m_layout_render_png,
     }
 )
