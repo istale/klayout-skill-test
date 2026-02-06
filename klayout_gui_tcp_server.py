@@ -1733,59 +1733,57 @@ def _m_hier_shapes_rec(_id, params):
     shapes_out = []
     truncated = False
 
+    # NOTE: Some KLayout builds require begin_shapes_rec(layer) argument.
+    # We iterate per layer index for portability.
     try:
-        it = cell.begin_shapes_rec()
-    except Exception as e:
-        return _err(_id, -32099, f"Internal error: begin_shapes_rec failed: {e}", "InternalError")
-
-    try:
-        while not it.at_end():
+        for lyr in layer_filter:
             if len(shapes_out) >= max_results:
                 truncated = True
                 break
 
             try:
-                layer_idx = int(_maybe_call(getattr(it, "layer", None)) or -1)
-            except Exception:
-                layer_idx = -1
+                it = cell.begin_shapes_rec(int(lyr))
+            except Exception as e:
+                return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
 
-            # Filter by layer index (when available)
-            if layer_idx >= 0 and layer_filter_set and (layer_idx not in layer_filter_set):
-                it.next()
-                continue
+            while not it.at_end():
+                if len(shapes_out) >= max_results:
+                    truncated = True
+                    break
 
-            shape = _maybe_call(getattr(it, "shape", None))
-            trans = _maybe_call(getattr(it, "trans", None))
-            inst_path = _maybe_call(getattr(it, "inst_path", None))
+                layer_idx = int(lyr)
 
-            if shape is None or trans is None:
-                it.next()
-                continue
+                shape = _maybe_call(getattr(it, "shape", None))
+                trans = _maybe_call(getattr(it, "trans", None))
+                inst_path = _maybe_call(getattr(it, "inst_path", None))
 
-            kind, payload = _shape_points_um_and_bbox(shape, trans, dbu)
-            if kind is None or kind not in shape_types:
-                it.next()
-                continue
+                if shape is None or trans is None:
+                    it.next()
+                    continue
 
-            layer_info = None
-            if layer_idx >= 0:
+                kind, payload = _shape_points_um_and_bbox(shape, trans, dbu)
+                if kind is None or kind not in shape_types:
+                    it.next()
+                    continue
+
+                layer_info = None
                 try:
                     li = _STATE.layout.get_info(layer_idx)
                     layer_info = {"layer": int(li.layer), "datatype": int(li.datatype)}
                 except Exception:
                     layer_info = None
 
-            rec = {
-                "shape_type": kind,
-                "hierarchy_path": _inst_path_to_cell_names(inst_path),
-                "layer_index": int(layer_idx),
-                "layer": layer_info,
-                "unit": "um",
-            }
-            rec.update(payload)
+                rec = {
+                    "shape_type": kind,
+                    "hierarchy_path": _inst_path_to_cell_names(inst_path),
+                    "layer_index": int(layer_idx),
+                    "layer": layer_info,
+                    "unit": "um",
+                }
+                rec.update(payload)
 
-            shapes_out.append(rec)
-            it.next()
+                shapes_out.append(rec)
+                it.next()
 
     except Exception as e:
         return _err(_id, -32099, f"Internal error: shapes_rec iteration failed: {e}", "InternalError")
