@@ -1750,9 +1750,13 @@ def _m_hier_shapes_rec(_id, params):
                 break
 
             try:
-                it = cell.begin_shapes_rec(int(lyr))
-            except Exception as e:
-                return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
+                # Prefer explicit RecursiveShapeIterator for better portability and inst_path support.
+                it = pya.RecursiveShapeIterator(_STATE.layout, cell, int(lyr))
+            except Exception:
+                try:
+                    it = cell.begin_shapes_rec(int(lyr))
+                except Exception as e:
+                    return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
 
             while not it.at_end():
                 if len(shapes_out) >= max_results:
