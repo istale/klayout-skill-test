@@ -84,7 +84,10 @@ def main():
             "path": out_rel,
             "width": 640,
             "height": 480,
-            "fit": True,
+            "viewport_mode": "center_size",
+            "units": "dbu",
+            "center": [5000, 3000],
+            "size": [20000, 20000],
             "overwrite": True,
         },
     )

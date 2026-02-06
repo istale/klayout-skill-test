@@ -711,7 +711,14 @@ def _m_view_screenshot(_id, params):
       path: string (required) - output path under server cwd. ".png" is appended if missing.
       width: int (default 1200)
       height: int (default 800)
-      fit: bool (default true) - call view.zoom_fit() before capture
+
+      viewport_mode: "fit" | "box" | "center_size" | "relative" (default: fit)
+      units: "um" | "dbu" (default: dbu)
+      box: [x1,y1,x2,y2] (required when viewport_mode=box)
+      center: [cx,cy] (required when viewport_mode=center_size)
+      size: [w,h] (required when viewport_mode=center_size)
+      steps: int (optional, used when viewport_mode=relative)
+
       oversampling: int (default 0) - passed to save_image_with_options
       resolution: float (default 0)
       linewidth: int (default 0)
@@ -733,19 +740,41 @@ def _m_view_screenshot(_id, params):
     path = params.get("path", None)
     width = params.get("width", 1200)
     height = params.get("height", 800)
-    fit = params.get("fit", True)
+
+    viewport_mode = params.get("viewport_mode", "fit")
+    units = params.get("units", "dbu")
+    box = params.get("box", None)
+    center = params.get("center", None)
+    size = params.get("size", None)
+    steps = params.get("steps", 0)
     oversampling = params.get("oversampling", 0)
     resolution = params.get("resolution", 0)
     linewidth = params.get("linewidth", 0)
     monochrome = params.get("monochrome", False)
     overwrite = params.get("overwrite", True)
 
+    if viewport_mode not in ("fit", "box", "center_size", "relative"):
+        return _err_std(_id, -32602, "Invalid params: viewport_mode must be fit|box|center_size|relative", "InvalidParams", {"field": "viewport_mode", "got": viewport_mode})
+    if units not in ("um", "dbu"):
+        return _err_std(_id, -32602, "Invalid params: units must be um|dbu", "InvalidParams", {"field": "units", "got": units})
+
     if not isinstance(width, int) or width < 1:
         return _err_std(_id, -32602, "Invalid params: width must be int >= 1", "InvalidParams", {"field": "width", "got": width})
     if not isinstance(height, int) or height < 1:
         return _err_std(_id, -32602, "Invalid params: height must be int >= 1", "InvalidParams", {"field": "height", "got": height})
-    if not isinstance(fit, bool):
-        return _err_std(_id, -32602, "Invalid params: fit must be boolean", "InvalidParams", {"field": "fit", "got": fit})
+
+    if viewport_mode == "box":
+        if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
+            return _err_std(_id, -32602, "Invalid params: box must be [x1,y1,x2,y2]", "InvalidParams", {"field": "box", "got": box})
+    if viewport_mode == "center_size":
+        if not (isinstance(center, list) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
+            return _err_std(_id, -32602, "Invalid params: center must be [cx,cy]", "InvalidParams", {"field": "center", "got": center})
+        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)):
+            return _err_std(_id, -32602, "Invalid params: size must be [w,h]", "InvalidParams", {"field": "size", "got": size})
+    if viewport_mode == "relative":
+        if not isinstance(steps, int):
+            return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
+
     if not isinstance(oversampling, int) or oversampling < 0:
         return _err_std(_id, -32602, "Invalid params: oversampling must be int >= 0", "InvalidParams", {"field": "oversampling", "got": oversampling})
     if not isinstance(resolution, (int, float)):
@@ -792,11 +821,23 @@ def _m_view_screenshot(_id, params):
     # Best-effort: ensure GUI updates before capture
     _gui_refresh("pre-screenshot")
 
-    if fit:
-        try:
+    # Apply viewport controls
+    try:
+        if viewport_mode == "fit":
             view.zoom_fit()
-        except Exception:
-            pass
+        elif viewport_mode == "box":
+            view.zoom_box(_make_dbox(_STATE.layout, units, box=box))
+        elif viewport_mode == "center_size":
+            view.zoom_box(_make_dbox(_STATE.layout, units, center=center, size=size))
+        else:
+            if steps > 0:
+                for _ in range(steps):
+                    view.zoom_in()
+            elif steps < 0:
+                for _ in range(-steps):
+                    view.zoom_out()
+    except Exception:
+        pass
 
     try:
         # target=DBox() (empty) uses current/default
@@ -828,7 +869,8 @@ def _m_view_screenshot(_id, params):
             "path": resolved["rel"],
             "width": int(width),
             "height": int(height),
-            "fit": bool(fit),
+            "viewport_mode": viewport_mode,
+            "units": units,
         },
     )
 
