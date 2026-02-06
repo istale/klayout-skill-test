@@ -76,6 +76,16 @@ def main():
     except FileNotFoundError:
         pass
 
+    # Step 0: ensure a GUI view exists and shows the current layout
+    r = rpc(s, _id, "view.ensure", {"zoom_fit": True})
+    if "error" in r:
+        if r["error"].get("data", {}).get("type") in ("MainWindowUnavailable", "NoCurrentView"):
+            print("SKIP (no GUI view):", r["error"].get("message"))
+            return 0
+        raise AssertionError(f"view.ensure failed: {r!r}")
+    assert_result(r)
+    _id += 1
+
     # Step 1: show all hierarchy levels (geometry display depth)
     r = rpc(s, _id, "view.set_hier_levels", {"mode": "max"})
     if "error" in r:

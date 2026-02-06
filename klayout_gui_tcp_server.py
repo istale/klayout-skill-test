@@ -881,13 +881,19 @@ def _apply_viewport(view, layout, viewport_mode, units, box, center, size, steps
         pass
 
 
-def _get_current_view():
-    app = pya.Application.instance()
-    mw = None
+def _get_main_window():
     try:
-        mw = app.main_window()
+        app = pya.Application.instance()
     except Exception:
-        mw = None
+        return None
+    try:
+        return app.main_window()
+    except Exception:
+        return None
+
+
+def _get_current_view():
+    mw = _get_main_window()
     if mw is None:
         return None, "MainWindowUnavailable"
     try:
@@ -897,6 +903,108 @@ def _get_current_view():
     if v is None:
         return None, "NoCurrentView"
     return v, None
+
+
+def _ensure_current_view(layout):
+    """Ensure a GUI LayoutView exists and is current, then show given layout.
+
+    Returns: (view, err_type)
+      err_type: None | "MainWindowUnavailable" | "NoCurrentView" | "InternalError"
+    """
+    mw = _get_main_window()
+    if mw is None:
+        return None, "MainWindowUnavailable"
+
+    # If a current view exists, reuse it.
+    try:
+        v = mw.current_view()
+    except Exception:
+        v = None
+
+    # Otherwise create a new empty view and select it.
+    if v is None:
+        try:
+            vidx = mw.create_view()
+            try:
+                mw.current_view_index = int(vidx)
+            except Exception:
+                try:
+                    mw.current_view_index = int(vidx)  # attribute setter
+                except Exception:
+                    pass
+            try:
+                v = mw.view(int(vidx))
+            except Exception:
+                v = None
+        except Exception:
+            v = None
+
+    if v is None:
+        return None, "NoCurrentView"
+
+    # Show layout in the view (create a cellview) so GUI operations have target.
+    try:
+        v.show_layout(layout, True)
+    except Exception:
+        # Some versions use named args or expect bool add_cellview.
+        try:
+            v.show_layout(layout, add_cellview=True)
+        except Exception as e:
+            return None, "InternalError"
+
+    return v, None
+
+
+def _m_view_ensure(_id, params):
+    """確保 GUI current_view 存在，並將目前 active layout 顯示到 view。
+
+    這是為了符合「客戶端→控制 GUI 行為」：view.* 類 RPC 需要可操作的 current_view。
+
+    Params:
+      zoom_fit: bool (default true) - after showing the layout, do zoom_fit.
+
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    zoom_fit = params.get("zoom_fit", True)
+    if not isinstance(zoom_fit, bool):
+        return _err_std(_id, -32602, "Invalid params: zoom_fit must be boolean", "InvalidParams", {"field": "zoom_fit"})
+
+    view, e = _ensure_current_view(_STATE.layout)
+    if e == "MainWindowUnavailable":
+        return _err(_id, -32013, "MainWindow not available: cannot ensure view", "MainWindowUnavailable")
+    if e == "NoCurrentView":
+        return _err(_id, -32016, "Cannot create/obtain current view", "NoCurrentView")
+    if e == "InternalError":
+        return _err(_id, -32099, "Failed to show layout in view", "InternalError")
+
+    _gui_refresh("view.ensure")
+    if zoom_fit:
+        try:
+            view.zoom_fit()
+        except Exception:
+            pass
+    _gui_refresh("view.ensure.post")
+
+    # Report view counts/index
+    mw = _get_main_window()
+    try:
+        views_n = int(mw.views())
+    except Exception:
+        views_n = None
+    try:
+        cur_idx = int(mw.current_view_index)
+    except Exception:
+        cur_idx = None
+
+    return _jsonrpc_result(_id, {"ok": True, "views": views_n, "current_view_index": cur_idx})
+
 
 
 def _m_view_set_viewport(_id, params):
@@ -2217,6 +2325,7 @@ _METHODS.update(
         "shape.create": _m_shape_create,
         "layout.export": _m_layout_export,
         "view.screenshot": _m_view_screenshot,
+        "view.ensure": _m_view_ensure,
         "view.set_viewport": _m_view_set_viewport,
         "view.set_hier_levels": _m_view_set_hier_levels,
         "layout.render_png": _m_layout_render_png,
