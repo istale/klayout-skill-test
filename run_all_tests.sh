@@ -115,5 +115,6 @@ run_one test_client_jsonrpc_req6_hier_query_down.py
 run_one test_client_jsonrpc_req6_hier_query_down_deep.py
 run_one test_client_jsonrpc_req6_hier_query_up_paths.py
 run_one test_client_jsonrpc_req6_hier_query_down_expanded.py
+run_one test_client_jsonrpc_req7_view_screenshot.py
 
 echo "[run_all_tests] ALL OK"

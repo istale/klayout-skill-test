@@ -612,6 +612,36 @@ def _m_shape_create(_id, params):
     )
 
 
+def _resolve_screenshot_path(_id, path):
+    """Resolve screenshot output path.
+
+    - If path is relative, it is interpreted relative to server cwd.
+    - For safety, path must stay within server cwd.
+    - Default extension is .png (if not provided).
+    """
+    if path is None:
+        return None, _err_std(_id, -32602, "Invalid params: path is required", "InvalidParams", {"field": "path"})
+    if not isinstance(path, str) or not path:
+        return None, _err_std(_id, -32602, "Invalid params: path must be a non-empty string", "InvalidParams", {"field": "path"})
+
+    rel = path
+    if not rel.lower().endswith(".png"):
+        rel = rel + ".png"
+
+    abs_p = os.path.abspath(os.path.join(os.getcwd(), rel))
+    cwd = os.path.abspath(os.getcwd())
+    if os.path.commonpath([abs_p, cwd]) != cwd:
+        return None, _err(_id, -32015, f"Invalid path (outside cwd): {rel}", "InvalidPath", {"path": rel})
+
+    # ensure parent dir exists
+    try:
+        os.makedirs(os.path.dirname(abs_p) or cwd, exist_ok=True)
+    except Exception as e:
+        return None, _err(_id, -32099, f"Failed to create directory: {e}", "InternalError")
+
+    return {"rel": rel, "abs": abs_p}, None
+
+
 def _m_layout_export(_id, params):
     err = _require_active_layout(_id)
     if err:
@@ -646,6 +676,138 @@ def _m_layout_export(_id, params):
         return _err(_id, -32099, f"Internal error during export: {e}", "InternalError")
 
     return _jsonrpc_result(_id, {"written": True, "path": resolved["rel"]})
+
+
+def _m_view_screenshot(_id, params):
+    """程式化截圖：將目前 LayoutView 匯出成 PNG。
+
+    依賴 KLayout GUI：需要 MainWindow 與 current_view。
+
+    Params:
+      path: string (required) - output path under server cwd. ".png" is appended if missing.
+      width: int (default 1200)
+      height: int (default 800)
+      fit: bool (default true) - call view.zoom_fit() before capture
+      oversampling: int (default 0) - passed to save_image_with_options
+      resolution: float (default 0)
+      linewidth: int (default 0)
+      monochrome: bool (default false)
+      overwrite: bool (default true)
+
+    Notes:
+      - Uses LayoutView.save_image_with_options (writes PNG synchronously).
+      - This captures the current scene (layout + annotations etc.).
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    path = params.get("path", None)
+    width = params.get("width", 1200)
+    height = params.get("height", 800)
+    fit = params.get("fit", True)
+    oversampling = params.get("oversampling", 0)
+    resolution = params.get("resolution", 0)
+    linewidth = params.get("linewidth", 0)
+    monochrome = params.get("monochrome", False)
+    overwrite = params.get("overwrite", True)
+
+    if not isinstance(width, int) or width < 1:
+        return _err_std(_id, -32602, "Invalid params: width must be int >= 1", "InvalidParams", {"field": "width", "got": width})
+    if not isinstance(height, int) or height < 1:
+        return _err_std(_id, -32602, "Invalid params: height must be int >= 1", "InvalidParams", {"field": "height", "got": height})
+    if not isinstance(fit, bool):
+        return _err_std(_id, -32602, "Invalid params: fit must be boolean", "InvalidParams", {"field": "fit", "got": fit})
+    if not isinstance(oversampling, int) or oversampling < 0:
+        return _err_std(_id, -32602, "Invalid params: oversampling must be int >= 0", "InvalidParams", {"field": "oversampling", "got": oversampling})
+    if not isinstance(resolution, (int, float)):
+        return _err_std(_id, -32602, "Invalid params: resolution must be number", "InvalidParams", {"field": "resolution", "got": resolution})
+    if not isinstance(linewidth, int) or linewidth < 0:
+        return _err_std(_id, -32602, "Invalid params: linewidth must be int >= 0", "InvalidParams", {"field": "linewidth", "got": linewidth})
+    if not isinstance(monochrome, bool):
+        return _err_std(_id, -32602, "Invalid params: monochrome must be boolean", "InvalidParams", {"field": "monochrome", "got": monochrome})
+    if not isinstance(overwrite, bool):
+        return _err_std(_id, -32602, "Invalid params: overwrite must be boolean", "InvalidParams", {"field": "overwrite", "got": overwrite})
+
+    resolved, perr = _resolve_screenshot_path(_id, path)
+    if perr:
+        return perr
+
+    if os.path.exists(resolved["abs"]) and not overwrite:
+        return _err(
+            _id,
+            -32011,
+            f"File exists and overwrite=false: {resolved['rel']}",
+            "FileExists",
+            {"path": resolved["rel"]},
+        )
+
+    app = pya.Application.instance()
+    mw = None
+    try:
+        mw = app.main_window()
+    except Exception:
+        mw = None
+
+    if mw is None:
+        return _err(_id, -32013, "MainWindow not available: cannot screenshot", "MainWindowUnavailable")
+
+    view = None
+    try:
+        view = mw.current_view()
+    except Exception:
+        view = None
+
+    if view is None:
+        return _err(_id, -32016, "No current view: cannot screenshot", "NoCurrentView")
+
+    # Best-effort: ensure GUI updates before capture
+    _gui_refresh("pre-screenshot")
+
+    if fit:
+        try:
+            view.zoom_fit()
+        except Exception:
+            pass
+
+    try:
+        # target=DBox() (empty) uses current/default
+        try:
+            target = pya.DBox()
+        except Exception:
+            target = None
+
+        if target is None:
+            view.save_image(resolved["abs"], int(width), int(height))
+        else:
+            view.save_image_with_options(
+                resolved["abs"],
+                int(width),
+                int(height),
+                int(linewidth),
+                int(oversampling),
+                float(resolution),
+                target,
+                bool(monochrome),
+            )
+    except Exception as e:
+        return _err(_id, -32099, f"Failed to save screenshot: {e}", "InternalError")
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "written": True,
+            "path": resolved["rel"],
+            "width": int(width),
+            "height": int(height),
+            "fit": bool(fit),
+        },
+    )
+
 
 
 def _m_layout_open(_id, params):
@@ -1701,6 +1863,7 @@ _METHODS.update(
         "layer.new": _m_layer_new,
         "shape.create": _m_shape_create,
         "layout.export": _m_layout_export,
+        "view.screenshot": _m_view_screenshot,
     }
 )
 
