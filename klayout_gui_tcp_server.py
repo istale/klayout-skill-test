@@ -1554,6 +1554,245 @@ def _m_layout_get_hierarchy_depth(_id, params):
 # -----------------------------------------------------------------------------
 
 
+def _maybe_call(x):
+    try:
+        return x() if callable(x) else x
+    except Exception:
+        return None
+
+
+def _inst_path_to_cell_names(inst_path):
+    """Convert InstancePath -> [cell_name, ...] (best-effort)."""
+    names = []
+    try:
+        for el in inst_path or []:
+            inst = _maybe_call(getattr(el, "inst", None))
+            if inst is None:
+                continue
+            c = _maybe_call(getattr(inst, "cell", None))
+            if c is None:
+                c = _maybe_call(getattr(inst, "cell_", None))
+            if c is None:
+                continue
+            nm = _maybe_call(getattr(c, "name", None))
+            if nm is not None:
+                names.append(str(nm))
+    except Exception:
+        pass
+    return names
+
+
+def _shape_points_um_and_bbox(shape, trans, dbu):
+    """Return (kind, payload_dict) or (None, None) if unsupported."""
+    # Polygon
+    try:
+        if callable(getattr(shape, "is_polygon", None)) and shape.is_polygon():
+            poly = _maybe_call(getattr(shape, "polygon", None))
+            if poly is None:
+                poly = _maybe_call(getattr(shape, "simple_polygon", None))
+            if poly is None:
+                return None, None
+
+            pts = []
+            for p in poly.each_point():
+                tp = trans * p
+                pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+            if not pts:
+                return None, None
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            return "polygon", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+    except Exception:
+        pass
+
+    # Box
+    try:
+        if callable(getattr(shape, "is_box", None)) and shape.is_box():
+            box = _maybe_call(getattr(shape, "box", None))
+            if box is None:
+                return None, None
+            b = box.transformed(trans)
+            pts = [
+                [float(b.left) * dbu, float(b.bottom) * dbu],
+                [float(b.right) * dbu, float(b.bottom) * dbu],
+                [float(b.right) * dbu, float(b.top) * dbu],
+                [float(b.left) * dbu, float(b.top) * dbu],
+            ]
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            return "box", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+    except Exception:
+        pass
+
+    # Path
+    try:
+        if callable(getattr(shape, "is_path", None)) and shape.is_path():
+            path = _maybe_call(getattr(shape, "path", None))
+            if path is None:
+                return None, None
+            pts = []
+            for p in path.each_point():
+                tp = trans * p
+                pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+            if not pts:
+                return None, None
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            width_um = float(_maybe_call(getattr(path, "width", None)) or 0.0) * dbu
+            return "path", {"points_um": pts, "width_um": width_um, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+    except Exception:
+        pass
+
+    return None, None
+
+
+def _m_hier_shapes_rec(_id, params):
+    """需求(新): 透過 begin_shapes_rec() 遞迴走訪 hierarchy shapes。
+
+    參考腳本: get_shape_hier_path.py
+
+    Params:
+      start_cell: string (required)
+      unit: "um" (optional, default "um")
+      shape_types: ["polygon","box","path"] (optional, default all)
+      layer_filter: int[] (optional) - layer index list
+      max_results: int (optional, default 200000)
+
+    Returns:
+      {"shapes": [...], "unit": "um", "count": N, "truncated": bool}
+
+    Shape record:
+      {
+        shape_type: "polygon"|"box"|"path",
+        hierarchy_path: string[],
+        layer_index: int,
+        layer: {layer:int, datatype:int} | null,
+        points_um: [[x,y],...],
+        bbox_um: [x1,y1,x2,y2],
+        width_um: number (path only),
+        unit: "um"
+      }
+
+    NOTE:
+      - begin_shapes_rec() 的 trans 是把 shape 轉到 start_cell 座標系。
+      - unit 目前只支援 "um"（與參考腳本一致）。
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    start_cell = params.get("start_cell", None)
+    unit = params.get("unit", "um")
+    shape_types = params.get("shape_types", None)
+    layer_filter = params.get("layer_filter", None)
+    max_results = params.get("max_results", 200000)
+
+    if not isinstance(start_cell, str) or not start_cell:
+        return _err_std(_id, -32602, "Invalid params: start_cell must be non-empty string", "InvalidParams", {"field": "start_cell"})
+
+    if unit != "um":
+        return _err_std(_id, -32602, "Invalid params: unit must be 'um'", "InvalidParams", {"field": "unit", "got": unit})
+
+    allowed_types = ("polygon", "box", "path")
+    if shape_types is None:
+        shape_types = list(allowed_types)
+    if not (isinstance(shape_types, list) and all(isinstance(x, str) and x in allowed_types for x in shape_types)):
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: shape_types must be a list of polygon|box|path",
+            "InvalidParams",
+            {"field": "shape_types", "allowed": list(allowed_types), "got": shape_types},
+        )
+
+    if layer_filter is not None:
+        if not (isinstance(layer_filter, list) and all(isinstance(x, int) and x >= 0 for x in layer_filter)):
+            return _err_std(_id, -32602, "Invalid params: layer_filter must be int[]", "InvalidParams", {"field": "layer_filter"})
+
+    if not isinstance(max_results, int) or max_results < 1:
+        return _err_std(_id, -32602, "Invalid params: max_results must be int >= 1", "InvalidParams", {"field": "max_results"})
+
+    if not _STATE.layout.has_cell(start_cell):
+        return _err(_id, -32002, f"Cell not found: {start_cell}", "CellNotFound", {"name": start_cell})
+
+    cell = _STATE.layout.cell(start_cell)
+    dbu = float(_STATE.layout.dbu)
+
+    # default: all layers
+    if layer_filter is None:
+        try:
+            layer_filter = list(range(int(_STATE.layout.layers())))
+        except Exception:
+            layer_filter = []
+    layer_filter_set = set(int(x) for x in layer_filter)
+
+    shapes_out = []
+    truncated = False
+
+    try:
+        it = cell.begin_shapes_rec()
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: begin_shapes_rec failed: {e}", "InternalError")
+
+    try:
+        while not it.at_end():
+            if len(shapes_out) >= max_results:
+                truncated = True
+                break
+
+            try:
+                layer_idx = int(_maybe_call(getattr(it, "layer", None)) or -1)
+            except Exception:
+                layer_idx = -1
+
+            # Filter by layer index (when available)
+            if layer_idx >= 0 and layer_filter_set and (layer_idx not in layer_filter_set):
+                it.next()
+                continue
+
+            shape = _maybe_call(getattr(it, "shape", None))
+            trans = _maybe_call(getattr(it, "trans", None))
+            inst_path = _maybe_call(getattr(it, "inst_path", None))
+
+            if shape is None or trans is None:
+                it.next()
+                continue
+
+            kind, payload = _shape_points_um_and_bbox(shape, trans, dbu)
+            if kind is None or kind not in shape_types:
+                it.next()
+                continue
+
+            layer_info = None
+            if layer_idx >= 0:
+                try:
+                    li = _STATE.layout.get_info(layer_idx)
+                    layer_info = {"layer": int(li.layer), "datatype": int(li.datatype)}
+                except Exception:
+                    layer_info = None
+
+            rec = {
+                "shape_type": kind,
+                "hierarchy_path": _inst_path_to_cell_names(inst_path),
+                "layer_index": int(layer_idx),
+                "layer": layer_info,
+                "unit": "um",
+            }
+            rec.update(payload)
+
+            shapes_out.append(rec)
+            it.next()
+
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: shapes_rec iteration failed: {e}", "InternalError")
+
+    return _jsonrpc_result(_id, {"shapes": shapes_out, "unit": "um", "count": int(len(shapes_out)), "truncated": bool(truncated)})
+
+
 def _m_hier_query_up_paths(_id, params):
     """需求6-2: query parent paths (from the single top cell) to a target cell.
 
@@ -2348,6 +2587,7 @@ _METHODS.update(
 
         "hier.query_down": _m_hier_query_down,
         "hier.query_up_paths": _m_hier_query_up_paths,
+        "hier.shapes_rec": _m_hier_shapes_rec,
     }
 )
 
