@@ -303,6 +303,83 @@ def _box_to_dict(b: "pya.Box"):
 
 
 # -----------------------------------------------------------------------------
+# GUI refresh helper
+# -----------------------------------------------------------------------------
+
+
+def _gui_refresh(reason=None):
+    """Best-effort refresh of KLayout GUI after DB changes.
+
+    Problem:
+      When we modify a Layout via the scripting API (insert shapes/instances,
+      create layers, etc.), the visible GUI may not repaint immediately.
+
+    Strategy:
+      - If a MainWindow/current_view exists, ask it to refresh/redraw.
+      - Always wrap in try/except to avoid breaking headless runs.
+
+    Notes:
+      - This is intentionally best-effort: KLayout API/Qt bindings differ across
+        versions and environments.
+      - In headless mode, main_window/current_view are typically unavailable and
+        this becomes a no-op.
+    """
+    try:
+        app = pya.Application.instance()
+    except Exception:
+        return
+
+    mw = None
+    try:
+        mw = app.main_window()
+    except Exception:
+        mw = None
+
+    # Process pending GUI events first (helps in some cases)
+    try:
+        app.process_events()
+    except Exception:
+        pass
+
+    if mw is None:
+        return
+
+    view = None
+    try:
+        view = mw.current_view()
+    except Exception:
+        view = None
+
+    if view is not None:
+        for meth in ("add_missing_layers", "refresh", "redraw", "update"):
+            try:
+                fn = getattr(view, meth, None)
+                if callable(fn):
+                    fn()
+            except Exception:
+                pass
+
+        # Qt widget repaint fallback
+        try:
+            vp = getattr(view, "viewport", None)
+            if callable(vp):
+                vp = vp()
+            if vp is not None:
+                upd = getattr(vp, "update", None)
+                if callable(upd):
+                    upd()
+        except Exception:
+            pass
+
+    # MainWindow message is optional; avoid spamming.
+    if reason:
+        try:
+            mw.message(f"[openclaw] refreshed: {reason}")
+        except Exception:
+            pass
+
+
+# -----------------------------------------------------------------------------
 # Method handlers (spec v0)
 # -----------------------------------------------------------------------------
 
@@ -371,6 +448,8 @@ def _m_layout_new(_id, params):
     _STATE.top_cell_name = top_cell_name
     _STATE.current_layer_index = None
 
+    _gui_refresh("layout.new")
+
     return _jsonrpc_result(_id, {"layout_id": "L1", "dbu": dbu, "top_cell": top_cell_name})
 
 
@@ -417,6 +496,8 @@ def _m_layer_new(_id, params):
     if as_current:
         _STATE.current_layer_index = li
 
+    _gui_refresh("layer.new")
+
     return _jsonrpc_result(_id, {"layer_index": li, "layer": ln, "datatype": dt, "name": nm})
 
 
@@ -442,6 +523,7 @@ def _m_cell_create(_id, params):
         return _err(_id, -32000, f"Cell already exists: {name}", "CellAlreadyExists", {"name": name})
 
     _STATE.layout.create_cell(name)
+    _gui_refresh("cell.create")
     return _jsonrpc_result(_id, {"created": True, "name": name})
 
 
@@ -491,6 +573,7 @@ def _m_shape_create(_id, params):
             )
         x1, y1, x2, y2 = coords
         cell.shapes(li).insert(pya.Box(x1, y1, x2, y2))
+        _gui_refresh("shape.create(box)")
         return _jsonrpc_result(_id, {"inserted": True, "type": "box", "cell": cell_name, "layer_index": int(li)})
 
     if shape_type == "polygon":
@@ -514,6 +597,7 @@ def _m_shape_create(_id, params):
                 )
             pts.append(pya.Point(p[0], p[1]))
         cell.shapes(li).insert(pya.Polygon(pts))
+        _gui_refresh("shape.create(polygon)")
         return _jsonrpc_result(
             _id,
             {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li)},
@@ -618,6 +702,8 @@ def _m_layout_open(_id, params):
     _STATE.layout_id = "L1"
     _STATE.layout_filename = resolved["rel"]
     _STATE.current_layer_index = None
+
+    _gui_refresh("layout.open")
 
     top_cell = None
     try:
@@ -1550,6 +1636,8 @@ def _m_instance_create(_id, params):
     cia = pya.CellInstArray(cells["child_cell_obj"], tr["t"])
     cells["parent_cell"].insert(cia)
 
+    _gui_refresh("instance.create")
+
     return _jsonrpc_result(
         _id,
         {
@@ -1588,6 +1676,8 @@ def _m_instance_array_create(_id, params):
 
     cia = pya.CellInstArray(cells["child_cell_obj"], tr["t"], a, b, arr["nx"], arr["ny"])
     cells["parent_cell"].insert(cia)
+
+    _gui_refresh("instance_array.create")
 
     return _jsonrpc_result(
         _id,
