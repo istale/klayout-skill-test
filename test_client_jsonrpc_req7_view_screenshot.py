@@ -76,6 +76,17 @@ def main():
     except FileNotFoundError:
         pass
 
+    # Step 1: show all hierarchy levels (geometry display depth)
+    r = rpc(s, _id, "view.set_hier_levels", {"mode": "max"})
+    if "error" in r:
+        if r["error"].get("data", {}).get("type") in ("MainWindowUnavailable", "NoCurrentView"):
+            print("SKIP (no GUI view):", r["error"].get("message"))
+            return 0
+        raise AssertionError(f"set_hier_levels failed: {r!r}")
+    assert_result(r)
+    _id += 1
+
+    # Step 2: screenshot
     r = rpc(
         s,
         _id,

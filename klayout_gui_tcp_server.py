@@ -881,6 +881,24 @@ def _apply_viewport(view, layout, viewport_mode, units, box, center, size, steps
         pass
 
 
+def _get_current_view():
+    app = pya.Application.instance()
+    mw = None
+    try:
+        mw = app.main_window()
+    except Exception:
+        mw = None
+    if mw is None:
+        return None, "MainWindowUnavailable"
+    try:
+        v = mw.current_view()
+    except Exception:
+        v = None
+    if v is None:
+        return None, "NoCurrentView"
+    return v, None
+
+
 def _m_view_set_viewport(_id, params):
     """只改視圖、不截圖：控制 GUI current_view 的 viewport。
 
@@ -927,23 +945,10 @@ def _m_view_set_viewport(_id, params):
         if not isinstance(steps, int):
             return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
 
-    app = pya.Application.instance()
-    mw = None
-    try:
-        mw = app.main_window()
-    except Exception:
-        mw = None
-
-    if mw is None:
+    view, v_err = _get_current_view()
+    if v_err == "MainWindowUnavailable":
         return _err(_id, -32013, "MainWindow not available: cannot set viewport", "MainWindowUnavailable")
-
-    view = None
-    try:
-        view = mw.current_view()
-    except Exception:
-        view = None
-
-    if view is None:
+    if v_err == "NoCurrentView":
         return _err(_id, -32016, "No current view: cannot set viewport", "NoCurrentView")
 
     _gui_refresh("pre-viewport")
@@ -956,6 +961,80 @@ def _m_view_set_viewport(_id, params):
             "ok": True,
             "viewport_mode": viewport_mode,
             "units": units,
+        },
+    )
+
+
+def _m_view_set_hier_levels(_id, params):
+    """控制 view 的 hierarchy geometry 顯示深度（不是展開 tree widget）。
+
+    這個對應 KLayout 的 min_hier_levels / max_hier_levels（以及 max_hier()）。
+
+    Params:
+      mode: "max" | "set" (default: max)
+      min_level: int (optional, only for mode=set)
+      max_level: int (optional, only for mode=set)
+
+    Notes:
+      - mode=max 會呼叫 view.max_hier()（顯示所有 hierarchy levels）
+      - 這是 API 層級的顯示深度控制，較穩；
+        不是去操作 Hierarchy browser UI 的展開節點。
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    mode = params.get("mode", "max")
+    min_level = params.get("min_level", None)
+    max_level = params.get("max_level", None)
+
+    if mode not in ("max", "set"):
+        return _err_std(_id, -32602, "Invalid params: mode must be max|set", "InvalidParams", {"field": "mode", "got": mode})
+    if mode == "set":
+        if min_level is not None and (not isinstance(min_level, int) or min_level < 0):
+            return _err_std(_id, -32602, "Invalid params: min_level must be int >= 0", "InvalidParams", {"field": "min_level", "got": min_level})
+        if max_level is not None and (not isinstance(max_level, int) or max_level < 0):
+            return _err_std(_id, -32602, "Invalid params: max_level must be int >= 0", "InvalidParams", {"field": "max_level", "got": max_level})
+
+    view, v_err = _get_current_view()
+    if v_err == "MainWindowUnavailable":
+        return _err(_id, -32013, "MainWindow not available: cannot set hier levels", "MainWindowUnavailable")
+    if v_err == "NoCurrentView":
+        return _err(_id, -32016, "No current view: cannot set hier levels", "NoCurrentView")
+
+    _gui_refresh("pre-hier-levels")
+
+    try:
+        if mode == "max":
+            view.max_hier()
+        else:
+            if min_level is not None:
+                view.min_hier_levels = int(min_level)
+            if max_level is not None:
+                view.max_hier_levels = int(max_level)
+    except Exception as e:
+        return _err(_id, -32099, f"Failed to set hierarchy levels: {e}", "InternalError")
+
+    _gui_refresh("post-hier-levels")
+
+    try:
+        cur_min = int(view.min_hier_levels)
+        cur_max = int(view.max_hier_levels)
+    except Exception:
+        cur_min = None
+        cur_max = None
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "ok": True,
+            "mode": mode,
+            "min_hier_levels": cur_min,
+            "max_hier_levels": cur_max,
         },
     )
 
@@ -2139,6 +2218,7 @@ _METHODS.update(
         "layout.export": _m_layout_export,
         "view.screenshot": _m_view_screenshot,
         "view.set_viewport": _m_view_set_viewport,
+        "view.set_hier_levels": _m_view_set_hier_levels,
         "layout.render_png": _m_layout_render_png,
     }
 )

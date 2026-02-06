@@ -32,6 +32,17 @@ Notes:
   deterministic behavior and performance.
 - Consider supporting both "defined" and "used" variants via an optional param.
 
+## View / Hierarchy control
+
+### Planned enhancement: control hierarchy browser expand depth (UI-only)
+Problem:
+- Users may want to programmatically expand/collapse the GUI hierarchy browser
+  to a certain depth for inspection.
+
+Notes:
+- This is UI-widget driven and likely more brittle across KLayout versions.
+- Prefer API-driven alternatives when possible (e.g. set current cell path).
+
 ## Programmatic screenshots
 
 ### Planned enhancement: headless / no-interaction screenshot export
