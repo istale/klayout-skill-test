@@ -1785,9 +1785,20 @@ def _m_hier_shapes_rec(_id, params):
                 except Exception:
                     layer_info = None
 
+                hp = _inst_path_to_cell_names(inst_path)
+                if not hp:
+                    try:
+                        hp2 = _hierarchy_path_from_iter(_STATE.layout, start_cell, it)
+                        # drop the start cell prefix if present
+                        if hp2 and hp2[0] == start_cell:
+                            hp2 = hp2[1:]
+                        hp = hp2
+                    except Exception:
+                        hp = []
+
                 rec = {
                     "shape_type": kind,
-                    "hierarchy_path": _inst_path_to_cell_names(inst_path),
+                    "hierarchy_path": hp,
                     "layer_index": int(layer_idx),
                     "layer": layer_info,
                     "unit": "um",
