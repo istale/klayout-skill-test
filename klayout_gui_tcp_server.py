@@ -678,6 +678,30 @@ def _m_layout_export(_id, params):
     return _jsonrpc_result(_id, {"written": True, "path": resolved["rel"]})
 
 
+def _to_um(layout, v, units):
+    """Convert value to micron (um)."""
+    if units == "um":
+        return float(v)
+    # dbu -> um
+    return float(v) * float(layout.dbu)
+
+
+def _make_dbox(layout, units, box=None, center=None, size=None):
+    """Build a DBox in micron units from either box=[x1,y1,x2,y2] or center/size."""
+    if box is not None:
+        x1, y1, x2, y2 = box
+        return pya.DBox(_to_um(layout, x1, units), _to_um(layout, y1, units), _to_um(layout, x2, units), _to_um(layout, y2, units))
+    if center is not None and size is not None:
+        cx, cy = center
+        w, h = size
+        cxu = _to_um(layout, cx, units)
+        cyu = _to_um(layout, cy, units)
+        wu = _to_um(layout, w, units)
+        hu = _to_um(layout, h, units)
+        return pya.DBox(cxu - wu / 2.0, cyu - hu / 2.0, cxu + wu / 2.0, cyu + hu / 2.0)
+    return pya.DBox()
+
+
 def _m_view_screenshot(_id, params):
     """程式化截圖：將目前 LayoutView 匯出成 PNG。
 
@@ -805,6 +829,144 @@ def _m_view_screenshot(_id, params):
             "width": int(width),
             "height": int(height),
             "fit": bool(fit),
+        },
+    )
+
+
+
+def _m_layout_render_png(_id, params):
+    """Headless-friendly render: create a standalone LayoutView and export PNG.
+
+    Params:
+      path: string (required)
+      width: int (default 1200)
+      height: int (default 800)
+      viewport_mode: "fit" | "box" | "center_size" | "relative" (default: fit)
+      units: "um" | "dbu" (default: dbu)
+      box: [x1,y1,x2,y2] (required when viewport_mode=box)
+      center: [cx,cy] (required when viewport_mode=center_size)
+      size: [w,h] (required when viewport_mode=center_size)
+      steps: int (optional, used when viewport_mode=relative)
+
+      oversampling: int (default 0)
+      resolution: float (default 0)
+      linewidth: int (default 0)
+      monochrome: bool (default false)
+      overwrite: bool (default true)
+
+    Notes:
+      - Uses LayoutView.new + LayoutView.show_layout to render even if there is
+        no current GUI view.
+      - If KLayout build lacks GUI/Qt support, this may fail.
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    path = params.get("path", None)
+    width = params.get("width", 1200)
+    height = params.get("height", 800)
+    viewport_mode = params.get("viewport_mode", "fit")
+    units = params.get("units", "dbu")
+
+    box = params.get("box", None)
+    center = params.get("center", None)
+    size = params.get("size", None)
+    steps = params.get("steps", 0)
+
+    oversampling = params.get("oversampling", 0)
+    resolution = params.get("resolution", 0)
+    linewidth = params.get("linewidth", 0)
+    monochrome = params.get("monochrome", False)
+    overwrite = params.get("overwrite", True)
+
+    if viewport_mode not in ("fit", "box", "center_size", "relative"):
+        return _err_std(_id, -32602, "Invalid params: viewport_mode must be fit|box|center_size|relative", "InvalidParams", {"field": "viewport_mode", "got": viewport_mode})
+    if units not in ("um", "dbu"):
+        return _err_std(_id, -32602, "Invalid params: units must be um|dbu", "InvalidParams", {"field": "units", "got": units})
+
+    if not isinstance(width, int) or width < 1:
+        return _err_std(_id, -32602, "Invalid params: width must be int >= 1", "InvalidParams", {"field": "width", "got": width})
+    if not isinstance(height, int) or height < 1:
+        return _err_std(_id, -32602, "Invalid params: height must be int >= 1", "InvalidParams", {"field": "height", "got": height})
+
+    if viewport_mode == "box":
+        if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
+            return _err_std(_id, -32602, "Invalid params: box must be [x1,y1,x2,y2]", "InvalidParams", {"field": "box", "got": box})
+    if viewport_mode == "center_size":
+        if not (isinstance(center, list) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
+            return _err_std(_id, -32602, "Invalid params: center must be [cx,cy]", "InvalidParams", {"field": "center", "got": center})
+        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)):
+            return _err_std(_id, -32602, "Invalid params: size must be [w,h]", "InvalidParams", {"field": "size", "got": size})
+    if viewport_mode == "relative":
+        if not isinstance(steps, int):
+            return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
+
+    resolved, perr = _resolve_screenshot_path(_id, path)
+    if perr:
+        return perr
+    if os.path.exists(resolved["abs"]) and not overwrite:
+        return _err(_id, -32011, f"File exists and overwrite=false: {resolved['rel']}", "FileExists", {"path": resolved["rel"]})
+
+    # Create a standalone view and attach the active layout.
+    try:
+        view = pya.LayoutView.new(False)
+    except Exception as e:
+        return _err(_id, -32017, f"Failed to create LayoutView: {e}", "LayoutViewUnavailable")
+
+    try:
+        # init_layers=True to populate layer properties automatically
+        view.show_layout(_STATE.layout, "", True, True)
+    except Exception as e:
+        return _err(_id, -32099, f"Failed to show layout in view: {e}", "InternalError")
+
+    # Apply viewport
+    try:
+        if viewport_mode == "fit":
+            view.zoom_fit()
+        elif viewport_mode == "box":
+            view.zoom_box(_make_dbox(_STATE.layout, units, box=box))
+        elif viewport_mode == "center_size":
+            view.zoom_box(_make_dbox(_STATE.layout, units, center=center, size=size))
+        else:
+            if steps > 0:
+                for _ in range(steps):
+                    view.zoom_in()
+            elif steps < 0:
+                for _ in range(-steps):
+                    view.zoom_out()
+    except Exception:
+        pass
+
+    # Render synchronously
+    try:
+        target = pya.DBox()  # empty -> current
+        view.save_image_with_options(
+            resolved["abs"],
+            int(width),
+            int(height),
+            int(linewidth),
+            int(oversampling),
+            float(resolution),
+            target,
+            bool(monochrome),
+        )
+    except Exception as e:
+        return _err(_id, -32099, f"Failed to render PNG: {e}", "InternalError")
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "written": True,
+            "path": resolved["rel"],
+            "width": int(width),
+            "height": int(height),
+            "viewport_mode": viewport_mode,
+            "units": units,
         },
     )
 
@@ -1864,6 +2026,7 @@ _METHODS.update(
         "shape.create": _m_shape_create,
         "layout.export": _m_layout_export,
         "view.screenshot": _m_view_screenshot,
+        "layout.render_png": _m_layout_render_png,
     }
 )
 
