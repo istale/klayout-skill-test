@@ -1590,6 +1590,68 @@ def _inst_path_to_cell_names(inst_path):
     return names
 
 
+def _hierarchy_path_from_iter(layout, start_cell_name, it):
+    """Best-effort hierarchy path from RecursiveShapeIterator.
+
+    Per docs, `it.path` returns InstElement[] describing the instance path from
+    the initial cell to the current cell containing the current shape.
+
+    We return [start_cell_name, ...cell names along the path..., owner_cell_name].
+    """
+    hp = [str(start_cell_name)] if start_cell_name else []
+
+    path = _maybe_call(getattr(it, "path", None))
+    if path is None:
+        path = []
+
+    for el in path or []:
+        c = None
+
+        # Common case: InstElement.inst -> Instance
+        inst = _maybe_call(getattr(el, "inst", None))
+        if inst is not None:
+            c = _maybe_call(getattr(inst, "cell", None))
+            if c is None:
+                c = _maybe_call(getattr(inst, "cell_", None))
+
+        # Alternative: InstElement.cell directly
+        if c is None:
+            c = _maybe_call(getattr(el, "cell", None))
+
+        # Fallback: cell_index
+        if c is None:
+            try:
+                ci = _maybe_call(getattr(el, "cell_index", None))
+                if ci is not None:
+                    c = layout.cell(int(ci))
+            except Exception:
+                c = None
+
+        if c is None:
+            continue
+
+        nm = _maybe_call(getattr(c, "name", None))
+        if nm is None:
+            continue
+
+        nm = str(nm)
+        if not hp or hp[-1] != nm:
+            hp.append(nm)
+
+    # Append owner cell of current shape if available
+    c2 = _maybe_call(getattr(it, "cell", None))
+    if c2 is None:
+        c2 = _maybe_call(getattr(it, "cell_", None))
+    if c2 is not None:
+        nm2 = _maybe_call(getattr(c2, "name", None))
+        if nm2 is not None:
+            nm2 = str(nm2)
+            if not hp or hp[-1] != nm2:
+                hp.append(nm2)
+
+    return hp
+
+
 def _shape_points_um_and_bbox(shape, trans, dbu):
     """Return (kind, payload_dict) or (None, None) if unsupported."""
     # Polygon
