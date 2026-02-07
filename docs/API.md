@@ -58,8 +58,11 @@
 - `LayerNotAvailable`（-32003）
 - `PathNotAllowed`（-32010）
 - `FileExists`（-32011）
+- `FileNotFound`（-32012）
 - `MainWindowUnavailable`（-32013）
+- `OpenFailed`（-32014）
 - `NoCurrentView`（-32016）
+- `LayoutViewUnavailable`（-32017）
 - `TooManyResults`（需求6 guardrail）
 - `InternalError`（-32099）
 
@@ -138,7 +141,116 @@
 
 ---
 
-## 6. layer.new
+## 6. layout.open
+在 KLayout 內開啟 layout 檔案並切換 server 的 active layout。
+
+### Params
+```json
+{"path":"demo.gds","mode":0}
+```
+
+- `path`：必填，且必須在 server cwd 底下（不可跳脫）
+- `mode`：`0|1|2`（傳給 `MainWindow.load_layout`），預設 0
+
+### Result
+```json
+{"opened":true,"path":"demo.gds","mode":0,"top_cell":"TOP"}
+```
+
+### Errors
+- `InvalidParams`
+- `PathNotAllowed`
+- `FileNotFound`
+- `MainWindowUnavailable`
+- `OpenFailed`
+
+---
+
+## 7. layout.export
+寫出目前 layout 到檔案（server cwd 底下）。
+
+### Params
+```json
+{"path":"out.gds","overwrite":true}
+```
+
+### Result
+```json
+{"written":true,"path":"out.gds"}
+```
+
+### Errors
+- `PathNotAllowed`
+- `FileExists`
+
+---
+
+## 8. layout.get_topcell
+取得（且要求唯一）top cell。
+
+### Params
+```json
+{}
+```
+
+### Result
+```json
+{"top_cell":"TOP"}
+```
+
+### Errors
+- `NoActiveLayout`
+- `NoTopCell`
+- `MultipleTopCells`
+
+---
+
+## 9. layout.get_layers
+取得 layout 已定義的 layers（definition-based）。
+
+### Params
+```json
+{}
+```
+
+### Result
+```json
+{"layers":[{"layer":1,"datatype":0,"name":null,"layer_index":0}]}
+```
+
+---
+
+## 10. layout.get_dbu
+取得 dbu。
+
+### Result
+```json
+{"dbu":0.001}
+```
+
+---
+
+## 11. layout.get_cells
+取得 cell 名稱列表（top-down）。
+
+### Result
+```json
+{"cells":["TOP","CHILD"]}
+```
+
+---
+
+## 12. layout.get_hierarchy_depth
+取得 hierarchy depth（定義：從 top 出發的最大 instance edges；top=0）。
+
+### Result
+```json
+{"depth":3,"depth_definition":"max instance edges from top (top=0)"}
+```
+
+---
+
+## 13. layer.new
 在目前 layout 建立/取得一個 layer。
 
 ### Params
@@ -153,7 +265,7 @@
 
 ---
 
-## 7. cell.create
+## 14. cell.create
 建立 cell。
 
 ### Params
@@ -168,7 +280,7 @@
 
 ---
 
-## 8. shape.create
+## 15. shape.create
 插入 shape（常用：box / polygon / path）。
 
 ### Params（box）
@@ -193,7 +305,7 @@
 
 ---
 
-## 9. instance.create
+## 16. instance.create
 建立單一 instance。
 
 ### Params
@@ -208,7 +320,7 @@
 
 ---
 
-## 10. instance_array.create
+## 17. instance_array.create
 建立 regular array instance。
 
 ### Params
@@ -234,7 +346,7 @@
 
 ---
 
-## 11. view.ensure（GUI）
+## 18. view.ensure（GUI）
 確保 GUI 的 current_view 存在並 show layout。
 
 ### Params
@@ -255,7 +367,7 @@
 
 ---
 
-## 12. view.screenshot（GUI）
+## 19. view.screenshot（GUI）
 將 current_view 匯出 PNG。
 
 ### Params（常用）
@@ -281,12 +393,28 @@
 
 ---
 
-## 13. view.set_viewport（GUI）
+## 20. view.set_viewport（GUI）
 只改視圖 viewport，不輸出圖片。
 
 ### Params
+- `viewport_mode=fit`
+```json
+{"viewport_mode":"fit"}
+```
+
+- `viewport_mode=box`
 ```json
 {"viewport_mode":"box","units":"dbu","box":[0,0,10000,10000]}
+```
+
+- `viewport_mode=center_size`
+```json
+{"viewport_mode":"center_size","units":"um","center":[5.0,5.0],"size":[10.0,8.0]}
+```
+
+- `viewport_mode=relative`
+```json
+{"viewport_mode":"relative","steps":1}
 ```
 
 ### Result
@@ -294,9 +422,13 @@
 {"ok":true,"viewport_mode":"box","units":"dbu"}
 ```
 
+### Errors
+- `MainWindowUnavailable` (-32013)
+- `NoCurrentView` (-32016)
+
 ---
 
-## 14. view.set_hier_levels（GUI）
+## 21. view.set_hier_levels（GUI）
 控制 hierarchy geometry 顯示深度（不是 hierarchy browser widget）。
 
 ### Params
@@ -317,7 +449,40 @@
 
 ---
 
-## 15. hier.query_down（需求6-3）
+## 22. layout.render_png（headless-friendly render）
+建立 standalone LayoutView 來輸出 PNG（即使沒有 GUI current_view 也嘗試 render）。
+
+### Params
+```json
+{
+  "path":"out.png",
+  "width":1200,
+  "height":800,
+  "viewport_mode":"fit",
+  "units":"dbu",
+  "overwrite":true
+}
+```
+
+### Result
+```json
+{
+  "written":true,
+  "path":"out.png",
+  "width":1200,
+  "height":800,
+  "viewport_mode":"fit",
+  "units":"dbu"
+}
+```
+
+### Errors
+- `LayoutViewUnavailable` (-32017)
+- `FileExists` / `PathNotAllowed`
+
+---
+
+## 23. hier.query_down（需求6-3）
 向下列舉 instances。
 
 ### Params
@@ -354,11 +519,11 @@
 ### Notes
 - `mode=structural`：陣列不展開。
 - `mode=expanded`：陣列展開，回傳 `expanded_index={ix,iy}`。
-- `engine`：內部引擎選擇（iterator/dfs）。目前 iterator 主要用在 expanded 以拿到 array element；structural 為避免爆量仍可能走 dfs（細節見 `docs/COMPAT.md`，待補）。
+- `engine`：iterator/dfs 的相容性策略見 `docs/COMPAT.md`。
 
 ---
 
-## 16. hier.query_down_stats（統計）
+## 24. hier.query_down_stats（統計）
 只回傳統計：依 `child_cell` 分組，**陣列展開計數**。
 
 ### Params
@@ -383,7 +548,7 @@
 
 ---
 
-## 17. hier.query_up_paths（需求6-2）
+## 25. hier.query_up_paths（需求6-2）
 從單一 top cell 回推到 target cell 的所有路徑（segments）。
 
 ### Params
@@ -411,7 +576,7 @@
 
 ---
 
-## 18. hier.shapes_rec（遞迴 shapes + hierarchy_path）
+## 26. hier.shapes_rec（遞迴 shapes + hierarchy_path）
 使用 `begin_shapes_rec(layer)` / `RecursiveShapeIterator.path` 遞迴列出 shapes。
 
 ### Params
