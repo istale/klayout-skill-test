@@ -386,14 +386,67 @@
 ## 17. hier.query_up_paths（需求6-2）
 從單一 top cell 回推到 target cell 的所有路徑（segments）。
 
-> 詳細輸出 schema 與 guardrail 規則目前已有實作與測試，但本文件尚未完整逐欄位展開（待補）。
+### Params
+```json
+{"cell":"CHILD","max_paths":10000}
+```
+
+### Result
+```json
+{
+  "cell":"CHILD",
+  "max_paths":10000,
+  "path_format":"segments",
+  "paths":[
+    ["<in-memory>","TOP","A","CHILD"],
+    ["<in-memory>","TOP","B","CHILD"]
+  ]
+}
+```
+
+### Notes
+- `paths[]` 每一筆都是「segments」：`[gds_filename, top_cell, ..., target_cell]`
+- guardrail：若 paths 數量超過 `max_paths`，回 `TooManyResults`
+- 限制：layout 必須只有一個 top cell；多 top cell 會回 `MultipleTopCells`
 
 ---
 
 ## 18. hier.shapes_rec（遞迴 shapes + hierarchy_path）
 使用 `begin_shapes_rec(layer)` / `RecursiveShapeIterator.path` 遞迴列出 shapes。
 
-- unit：目前固定 `um`
-- hierarchy_path：來自 `it.path`（InstElement[]）
+### Params
+```json
+{
+  "start_cell":"TOP",
+  "unit":"um",
+  "shape_types":["polygon","box","path"],
+  "layer_filter":[0,1,2],
+  "max_results":200000
+}
+```
 
-> 詳細輸出 schema（points_um/bbox_um/width_um）與 layer_filter 行為，建議後續補齊。
+### Result
+```json
+{
+  "shapes":[
+    {
+      "shape_type":"box",
+      "hierarchy_path":["CHILD"],
+      "layer_index":0,
+      "layer":{"layer":1,"datatype":0},
+      "points_um":[[1.0,2.0],[1.1,2.0],[1.1,2.2],[1.0,2.2]],
+      "bbox_um":[1.0,2.0,1.1,2.2],
+      "unit":"um"
+    }
+  ],
+  "unit":"um",
+  "count":1,
+  "truncated":false
+}
+```
+
+### Notes
+- `unit` 目前只支援 `"um"`
+- `layer_filter` 是 layer index（不是 layer/datatype pair）
+- `hierarchy_path` 主要來自 `RecursiveShapeIterator.path`（InstElement[]）
+- `max_results` 為 guardrail：超過會 `truncated=true` 並停止收集

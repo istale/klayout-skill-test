@@ -50,6 +50,7 @@ Docs:
 - 執行模式：`docs/EXECUTION_MODES.md`
 - GUI 模型：`docs/GUI_MODEL.md`
 - 術語表：`docs/GLOSSARY.md`
+- 相容性備註：`docs/COMPAT.md`
 
 Single-client only:
 - Only one client connection is supported at a time.
