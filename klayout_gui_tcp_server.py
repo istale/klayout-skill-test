@@ -2085,6 +2085,7 @@ def _m_hier_query_down(_id, params):
     root = params.get("cell", None)
     depth = params.get("depth", None)
     mode = params.get("mode", "structural")
+    engine = params.get("engine", "iterator")
 
     include_bbox = params.get("include_bbox", False)
     max_results = params.get("max_results", None)
@@ -2106,6 +2107,15 @@ def _m_hier_query_down(_id, params):
             "Invalid params: mode must be 'structural' or 'expanded'",
             "InvalidParams",
             {"field": "mode", "allowed": ["structural", "expanded"], "got": mode},
+        )
+
+    if engine not in ("iterator", "dfs"):
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: engine must be 'iterator' or 'dfs'",
+            "InvalidParams",
+            {"field": "engine", "allowed": ["iterator", "dfs"], "got": engine},
         )
 
     # mode='expanded' is supported (arrays expand into per-element records)
@@ -2300,6 +2310,166 @@ def _m_hier_query_down(_id, params):
         _deep_bbox_memo[key] = b
         return b
 
+    def _iter_inst_path_cells(itrec, root_name):
+        """Return (path_cells, parent_cell_name, parent_depth).
+
+        path_cells aims to match the existing DFS semantics: [root, ..., parent].
+
+        For RecursiveInstanceIterator, we try:
+          - itrec.cell (parent cell)
+          - itrec.path (InstElement[] from initial cell to parent cell)
+        """
+        parent_cell_name = None
+        try:
+            c = _maybe_call(getattr(itrec, "cell", None))
+            if c is not None:
+                parent_cell_name = str(_maybe_call(getattr(c, "name", None)) or "")
+        except Exception:
+            parent_cell_name = None
+
+        path_cells = [str(root_name)]
+
+        try:
+            path = _maybe_call(getattr(itrec, "path", None))
+        except Exception:
+            path = None
+
+        # Best-effort parse InstElement[] -> cell names
+        try:
+            for el in path or []:
+                nm = None
+                c2 = _maybe_call(getattr(el, "cell", None))
+                if c2 is not None:
+                    nm = _maybe_call(getattr(c2, "name", None))
+                if nm is None:
+                    inst0 = _maybe_call(getattr(el, "inst", None))
+                    if inst0 is not None:
+                        cc0 = _maybe_call(getattr(inst0, "cell", None))
+                        if cc0 is None:
+                            cc0 = _maybe_call(getattr(inst0, "cell_", None))
+                        if cc0 is not None:
+                            nm = _maybe_call(getattr(cc0, "name", None))
+                if nm is not None:
+                    s = str(nm)
+                    if s and (not path_cells or path_cells[-1] != s):
+                        path_cells.append(s)
+        except Exception:
+            pass
+
+        if parent_cell_name:
+            if not path_cells or path_cells[-1] != parent_cell_name:
+                path_cells.append(parent_cell_name)
+
+        parent_depth = max(0, len(path_cells) - 1)
+        return path_cells, parent_cell_name or str(path_cells[-1]), parent_depth
+
+    def run_iterator_engine():
+        root_cell_obj = _STATE.layout.cell(root)
+
+        # Create recursive iterator
+        itrec = None
+        try:
+            itrec = pya.RecursiveInstanceIterator(_STATE.layout, root_cell_obj)
+        except Exception:
+            itrec = None
+        if itrec is None:
+            try:
+                itrec = root_cell_obj.begin_instances_rec()
+            except Exception as e:
+                return _err(_id, -32099, f"Internal error: begin_instances_rec failed: {e}", "InternalError")
+
+        # Configure depth on iterator (depth counts instance-edges from root; parent depth = depth-1)
+        try:
+            itrec.min_depth = 0
+            itrec.max_depth = max(0, int(depth) - 1)
+        except Exception:
+            pass
+
+        seen_array_instances = set()
+
+        try:
+            while not itrec.at_end():
+                el = _maybe_call(getattr(itrec, "current_inst_element", None))
+                inst = None
+                if el is not None:
+                    inst = _maybe_call(getattr(el, "inst", None))
+                if inst is None:
+                    # Fallbacks
+                    inst = _maybe_call(getattr(itrec, "inst", None))
+                    if inst is None:
+                        inst = _maybe_call(getattr(itrec, "instance", None))
+
+                if inst is None:
+                    itrec.next()
+                    continue
+
+                # Parent cell
+                path_cells, parent_cell_name, parent_depth = _iter_inst_path_cells(itrec, root)
+
+                # Child cell (target cell)
+                child_cell = _maybe_call(getattr(itrec, "inst_cell", None))
+                if child_cell is None:
+                    try:
+                        child_cell = inst.cell
+                        if callable(child_cell):
+                            child_cell = child_cell()
+                    except Exception:
+                        try:
+                            child_cell = inst.cell_()
+                        except Exception:
+                            child_cell = None
+
+                if child_cell is None:
+                    itrec.next()
+                    continue
+
+                kind, cia, arr = inst_kind_and_array(inst)
+
+                # Expanded mode: each iterator step corresponds to one physical instance element.
+                # We always return kind='single' records (matching existing expanded mode output).
+                t = _maybe_call(getattr(itrec, "inst_trans", None))
+                tdict = _trans_to_dict(t) if t is not None else (inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False})
+
+                expanded_index = None
+                if el is not None and arr is not None:
+                    try:
+                        # InstElement provides ia/ib for array members.
+                        expanded_index = {"ix": int(_maybe_call(getattr(el, "ia", None)) or 0), "iy": int(_maybe_call(getattr(el, "ib", None)) or 0)}
+                    except Exception:
+                        expanded_index = None
+
+                rec = {
+                    "kind": "single",
+                    "parent_cell": parent_cell_name,
+                    "child_cell": child_cell.name,
+                    "trans": tdict,
+                    "array": arr,
+                    "path": list(path_cells),
+                }
+                if expanded_index is not None:
+                    rec["expanded_index"] = expanded_index
+
+                if include_bbox:
+                    bbox_elem = None
+                    try:
+                        cb = deep_bbox_cell(child_cell)
+                        if cb is not None and t is not None:
+                            bbox_elem = cb.transformed(t)
+                    except Exception:
+                        bbox_elem = None
+                    rec["bbox"] = _box_to_dict(bbox_elem)
+
+                err2 = push_record(rec)
+                if err2:
+                    return err2
+
+                itrec.next()
+
+        except Exception as e:
+            return _err(_id, -32099, f"Internal error: hier.query_down iteration failed: {e}", "InternalError")
+
+        return None
+
     def dfs(cell_obj, depth_left, path_cells):
         if depth_left <= 0:
             return None
@@ -2408,8 +2578,29 @@ def _m_hier_query_down(_id, params):
 
         return None
 
-    root_cell_obj = _STATE.layout.cell(root)
-    err4 = dfs(root_cell_obj, depth, [root])
+    # Engine selection: prefer official iterator, with fallback to DFS on iterator InternalError.
+    err4 = None
+
+    if engine == "iterator" and mode == "expanded":
+        err4 = run_iterator_engine()
+        if err4:
+            # Only fall back on iterator-specific internal failures.
+            et = None
+            try:
+                et = (err4.get("error", {}) or {}).get("data", {}).get("type")
+            except Exception:
+                et = None
+            if et == "InternalError":
+                root_cell_obj = _STATE.layout.cell(root)
+                err4 = dfs(root_cell_obj, depth, [root])
+
+    else:
+        # DFS engine is used for:
+        # - engine='dfs'
+        # - engine='iterator' + mode='structural' (avoid per-array-element iteration blowup)
+        root_cell_obj = _STATE.layout.cell(root)
+        err4 = dfs(root_cell_obj, depth, [root])
+
     if err4:
         return err4
 
