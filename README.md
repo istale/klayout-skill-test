@@ -40,10 +40,16 @@ Terminal B:
 python3 /home/istale/.openclaw/workspace/klayout_skill_test/test_client_ping.py 5055
 ```
 
-## Protocol v0 (JSON-RPC 2.0)
+## Protocol (JSON-RPC 2.0)
 Transport:
 - One JSON-RPC request per line (newline-delimited JSON)
 - One JSON-RPC response per line
+
+Docs:
+- API 規格：`docs/API.md`
+- 執行模式：`docs/EXECUTION_MODES.md`
+- GUI 模型：`docs/GUI_MODEL.md`
+- 術語表：`docs/GLOSSARY.md`
 
 Single-client only:
 - Only one client connection is supported at a time.
