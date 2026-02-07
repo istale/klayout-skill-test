@@ -596,11 +596,48 @@ def _m_shape_create(_id, params):
                     {"field": "coords"},
                 )
             pts.append(pya.Point(p[0], p[1]))
-        cell.shapes(li).insert(pya.Polygon(pts))
+        # Use SimplePolygon for better compatibility with RecursiveShapeIterator
+        cell.shapes(li).insert(pya.SimplePolygon(pts))
         _gui_refresh("shape.create(polygon)")
         return _jsonrpc_result(
             _id,
             {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li)},
+        )
+
+    if shape_type == "path":
+        if not (isinstance(coords, list) and len(coords) >= 2):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: path coords must be [[x,y],...] with >=2 points",
+                "InvalidParams",
+                {"field": "coords"},
+            )
+        width = params.get("width", None)
+        if not isinstance(width, int) or width <= 0:
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: path width must be a positive int (DBU)",
+                "InvalidParams",
+                {"field": "width"},
+            )
+        pts = []
+        for p in coords:
+            if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
+                return _err_std(
+                    _id,
+                    -32602,
+                    "Invalid params: path point must be [x,y] (int DBU)",
+                    "InvalidParams",
+                    {"field": "coords"},
+                )
+            pts.append(pya.Point(p[0], p[1]))
+        cell.shapes(li).insert(pya.Path(pts, width))
+        _gui_refresh("shape.create(path)")
+        return _jsonrpc_result(
+            _id,
+            {"inserted": True, "type": "path", "cell": cell_name, "layer_index": int(li), "width": int(width)},
         )
 
     return _err_std(
@@ -1654,21 +1691,46 @@ def _hierarchy_path_from_iter(layout, start_cell_name, it):
 
 def _shape_points_um_and_bbox(shape, trans, dbu):
     """Return (kind, payload_dict) or (None, None) if unsupported."""
-    # Polygon
+    # Polygon / SimplePolygon
     try:
-        if callable(getattr(shape, "is_polygon", None)) and shape.is_polygon():
+        # Be permissive across KLayout versions: try to obtain polygon-like geometry
+        # even when is_polygon/is_simple_polygon is unavailable or unreliable.
+        poly = None
+        try:
             poly = _maybe_call(getattr(shape, "polygon", None))
-            if poly is None:
+        except Exception:
+            poly = None
+        if poly is None:
+            try:
                 poly = _maybe_call(getattr(shape, "simple_polygon", None))
-            if poly is None:
-                return None, None
+            except Exception:
+                poly = None
 
-            pts = []
-            for p in poly.each_point():
-                tp = trans * p
-                pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
-            if not pts:
-                return None, None
+        pts = []
+        if poly is not None:
+            try:
+                for p in poly.each_point():
+                    tp = trans * p
+                    pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+            except Exception:
+                pts = []
+
+        # Fallback: derive a bbox if polygon point iteration isn't available.
+        if not pts:
+            try:
+                bb = _maybe_call(getattr(shape, "bbox", None))
+                if bb is not None:
+                    bbt = bb.transformed(trans)
+                    pts = [
+                        [float(bbt.left) * dbu, float(bbt.bottom) * dbu],
+                        [float(bbt.right) * dbu, float(bbt.bottom) * dbu],
+                        [float(bbt.right) * dbu, float(bbt.top) * dbu],
+                        [float(bbt.left) * dbu, float(bbt.top) * dbu],
+                    ]
+            except Exception:
+                pts = []
+
+        if pts:
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
             return "polygon", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
@@ -1700,10 +1762,24 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
             path = _maybe_call(getattr(shape, "path", None))
             if path is None:
                 return None, None
+
             pts = []
-            for p in path.each_point():
-                tp = trans * p
-                pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+            # KLayout API varies a bit across versions; try multiple ways to get points.
+            try:
+                it = path.each_point()
+                for p in it:
+                    tp = trans * p
+                    pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+            except Exception:
+                try:
+                    n = int(_maybe_call(getattr(path, "num_points", None)) or 0)
+                    for i in range(n):
+                        p = _maybe_call(getattr(path, "point", None), i)
+                        tp = trans * p
+                        pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+                except Exception:
+                    pts = []
+
             if not pts:
                 return None, None
             xs = [p[0] for p in pts]
@@ -1803,6 +1879,15 @@ def _m_hier_shapes_rec(_id, params):
     shapes_out = []
     truncated = False
 
+    debug = bool(params.get("debug", False))
+    dbg = {
+        "seen": 0,
+        "is_box": 0,
+        "is_polygon": 0,
+        "is_simple_polygon": 0,
+        "is_path": 0,
+    }
+
     # NOTE: Some KLayout builds require begin_shapes_rec(layer) argument.
     # We iterate per layer index for portability.
     try:
@@ -1834,6 +1919,29 @@ def _m_hier_shapes_rec(_id, params):
                 if shape is None or trans is None:
                     it.next()
                     continue
+
+                if debug:
+                    dbg["seen"] += 1
+                    try:
+                        if callable(getattr(shape, "is_box", None)) and shape.is_box():
+                            dbg["is_box"] += 1
+                    except Exception:
+                        pass
+                    try:
+                        if callable(getattr(shape, "is_polygon", None)) and shape.is_polygon():
+                            dbg["is_polygon"] += 1
+                    except Exception:
+                        pass
+                    try:
+                        if callable(getattr(shape, "is_simple_polygon", None)) and shape.is_simple_polygon():
+                            dbg["is_simple_polygon"] += 1
+                    except Exception:
+                        pass
+                    try:
+                        if callable(getattr(shape, "is_path", None)) and shape.is_path():
+                            dbg["is_path"] += 1
+                    except Exception:
+                        pass
 
                 kind, payload = _shape_points_um_and_bbox(shape, trans, dbu)
                 if kind is None or kind not in shape_types:
@@ -1873,7 +1981,10 @@ def _m_hier_shapes_rec(_id, params):
     except Exception as e:
         return _err(_id, -32099, f"Internal error: shapes_rec iteration failed: {e}", "InternalError")
 
-    return _jsonrpc_result(_id, {"shapes": shapes_out, "unit": "um", "count": int(len(shapes_out)), "truncated": bool(truncated)})
+    out = {"shapes": shapes_out, "unit": "um", "count": int(len(shapes_out)), "truncated": bool(truncated)}
+    if debug:
+        out["debug"] = dbg
+    return _jsonrpc_result(_id, out)
 
 
 def _m_hier_query_up_paths(_id, params):
