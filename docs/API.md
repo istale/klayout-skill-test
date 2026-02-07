@@ -283,6 +283,15 @@
 ## 15. shape.create
 插入 shape（常用：box / polygon / path）。
 
+### Params
+共通欄位：
+- `cell`：string（預設 TOP）
+- layer 選擇（優先序）：
+  1) `layer_index`（int）
+  2) `layer`（object: `{layer,datatype,name?}`）
+  3) 目前 current layer（由 `layer.new(as_current=true)` 設定）
+  - 若都沒有，回 `LayerNotAvailable`（-32003）
+
 ### Params（box）
 ```json
 {"cell":"TOP","layer_index":0,"type":"box","coords":[0,0,1000,2000]}
@@ -302,6 +311,12 @@
 ```json
 {"inserted":true,"type":"box","cell":"TOP","layer_index":0}
 ```
+
+### Errors
+- `NoActiveLayout`
+- `CellNotFound`
+- `LayerNotAvailable`
+- `InvalidParams`
 
 ---
 
@@ -370,14 +385,39 @@
 ## 19. view.screenshot（GUI）
 將 current_view 匯出 PNG。
 
-### Params（常用）
+### Params
+基本輸出：
+- `path`：輸出路徑（若缺 `.png` 會自動補）
+- `width` / `height`
+- `overwrite`
+
+Viewport（與 `view.set_viewport` 一致）：
+- `viewport_mode`: `fit | box | center_size | relative`
+- `units`: `dbu | um`
+- `box`: `[x1,y1,x2,y2]`（viewport_mode=box）
+- `center`: `[cx,cy]`（viewport_mode=center_size）
+- `size`: `[w,h]`（viewport_mode=center_size）
+- `steps`: int（viewport_mode=relative）
+
+Rendering options（傳給 `save_image_with_options`）：
+- `oversampling`（int, default 0）
+- `resolution`（float, default 0）
+- `linewidth`（int, default 0）
+- `monochrome`（bool, default false）
+
+### Params（範例）
 ```json
 {
   "path":"out.png",
   "width":1200,
   "height":800,
-  "viewport_mode":"fit",
+  "viewport_mode":"box",
   "units":"dbu",
+  "box":[0,0,10000,10000],
+  "oversampling":0,
+  "resolution":0,
+  "linewidth":0,
+  "monochrome":false,
   "overwrite":true
 }
 ```
@@ -390,6 +430,9 @@
 ### Errors
 - `MainWindowUnavailable` (-32013)
 - `NoCurrentView` (-32016)
+- `PathNotAllowed`
+- `FileExists`
+- `InvalidParams`
 
 ---
 
