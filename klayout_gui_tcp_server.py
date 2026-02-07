@@ -2043,6 +2043,150 @@ def _m_hier_query_up_paths(_id, params):
 
 
 
+def _m_hier_query_down_stats(_id, params):
+    """需求(新): query instance counts grouped by child_cell.
+
+    This method returns statistics only (no instance list).
+
+    Semantics:
+      - Counts are EXPANDED (array instances count as nx*ny).
+      - Grouping key is the child cell name (inst_cell.name).
+
+    Params:
+      cell: string (required)
+      depth: int >= 0 (required)
+      max_results: int (optional, default 20000000)
+        - Guardrail on total counted instance elements.
+
+    Returns:
+      {
+        root: string,
+        depth: int,
+        expanded: true,
+        total: int,
+        by_child_cell: { [cell_name]: count, ... },
+        truncated: bool
+      }
+
+    Implementation:
+      Uses RecursiveInstanceIterator (Cell.begin_instances_rec) which iterates
+      instance *elements* (array members) and provides inst_cell/inst_trans.
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    root = params.get("cell", None)
+    depth = params.get("depth", None)
+    max_results = params.get("max_results", 20_000_000)
+
+    if not isinstance(root, str) or not root:
+        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+
+    if not isinstance(depth, int) or depth < 0:
+        return _err_std(_id, -32602, "Invalid params: depth must be int >= 0", "InvalidParams", {"field": "depth"})
+
+    if not isinstance(max_results, int) or max_results < 1:
+        return _err_std(_id, -32602, "Invalid params: max_results must be int >= 1", "InvalidParams", {"field": "max_results"})
+
+    if not _STATE.layout.has_cell(root):
+        return _err(_id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root})
+
+    root_cell_obj = _STATE.layout.cell(root)
+
+    by = {}
+    total = 0
+    truncated = False
+
+    # If depth==0, there are no child instances.
+    if depth == 0:
+        return _jsonrpc_result(
+            _id,
+            {
+                "root": root,
+                "depth": int(depth),
+                "expanded": True,
+                "total": 0,
+                "by_child_cell": {},
+                "truncated": False,
+            },
+        )
+
+    # Create recursive iterator
+    itrec = None
+    try:
+        itrec = pya.RecursiveInstanceIterator(_STATE.layout, root_cell_obj)
+    except Exception:
+        itrec = None
+    if itrec is None:
+        try:
+            itrec = root_cell_obj.begin_instances_rec()
+        except Exception as e:
+            return _err(_id, -32099, f"Internal error: begin_instances_rec failed: {e}", "InternalError")
+
+    # Configure depth: iterator depth applies to the PARENT cell of delivered instances.
+    try:
+        itrec.min_depth = 0
+        itrec.max_depth = max(0, int(depth) - 1)
+    except Exception:
+        pass
+
+    try:
+        while not itrec.at_end():
+            c = _maybe_call(getattr(itrec, "inst_cell", None))
+            if c is None:
+                # Fallback: obtain instance then its cell
+                inst = _maybe_call(getattr(itrec, "inst", None))
+                if inst is None:
+                    inst = _maybe_call(getattr(itrec, "instance", None))
+                if inst is not None:
+                    try:
+                        c = inst.cell
+                        if callable(c):
+                            c = c()
+                    except Exception:
+                        try:
+                            c = inst.cell_()
+                        except Exception:
+                            c = None
+
+            if c is not None:
+                try:
+                    nm = str(_maybe_call(getattr(c, "name", None)) or "")
+                except Exception:
+                    nm = ""
+                if nm:
+                    by[nm] = int(by.get(nm, 0)) + 1
+                    total += 1
+
+            if total >= max_results:
+                truncated = True
+                break
+
+            itrec.next()
+
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: hier.query_down_stats iteration failed: {e}", "InternalError")
+
+    return _jsonrpc_result(
+        _id,
+        {
+            "root": root,
+            "depth": int(depth),
+            "expanded": True,
+            "total": int(total),
+            "by_child_cell": by,
+            "truncated": bool(truncated),
+            "max_results": int(max_results),
+        },
+    )
+
+
+
 def _m_hier_query_down(_id, params):
     """需求6-3: query instances downward from a given root cell.
 
@@ -2860,6 +3004,7 @@ _METHODS.update(
         "layout.get_hierarchy_depth": _m_layout_get_hierarchy_depth,
 
         "hier.query_down": _m_hier_query_down,
+        "hier.query_down_stats": _m_hier_query_down_stats,
         "hier.query_up_paths": _m_hier_query_up_paths,
         "hier.shapes_rec": _m_hier_shapes_rec,
     }
