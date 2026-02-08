@@ -1,2 +1,9 @@
 # Local test outputs
 /test_out_*.png
+
+# Local python/venv caches
+.venv/
+__pycache__/
+
+# Offline reference mirrors
+klayout-python/references/docs_html/
