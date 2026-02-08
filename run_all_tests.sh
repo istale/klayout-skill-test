@@ -120,5 +120,6 @@ run_one test_client_jsonrpc_req7_view_screenshot.py
 run_one test_client_jsonrpc_req7_view_set_viewport.py
 run_one test_client_jsonrpc_req7_layout_render_png.py
 run_one test_client_jsonrpc_hier_shapes_rec_begin.py
+run_one test_client_jsonrpc_reqX_hier_shapes_rec_boxes.py
 
 echo "[run_all_tests] ALL OK"

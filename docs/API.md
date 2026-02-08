@@ -302,6 +302,19 @@
 {"cell":"TOP","layer_index":0,"type":"polygon","coords":[[0,0],[1000,0],[1000,1000]]}
 ```
 
+### Params（polygon with holes）
+```json
+{
+  "cell":"TOP",
+  "layer_index":0,
+  "type":"polygon",
+  "coords":[[0,0],[4000,0],[4000,3000],[0,3000]],
+  "holes":[
+    [[1000,1000],[3000,1000],[3000,2000],[1000,2000]]
+  ]
+}
+```
+
 ### Params（path）
 ```json
 {"cell":"TOP","layer_index":0,"type":"path","coords":[[0,0],[1000,0]],"width":200}
@@ -658,3 +671,44 @@ Rendering options（傳給 `save_image_with_options`）：
 - `layer_filter` 是 layer index（不是 layer/datatype pair）
 - `hierarchy_path` 主要來自 `RecursiveShapeIterator.path`（InstElement[]）
 - `max_results` 為 guardrail：超過會 `truncated=true` 並停止收集
+
+---
+
+## 27. hier.shapes_rec_boxes（Manhattan polygon → exact boxes, DBU）
+將遞迴走訪到的 shapes 統一轉換為 **box set**（精確等價，DBU），支援 polygon（可含洞）。
+
+### Params
+```json
+{
+  "start_cell":"TOP",
+  "unit":"dbu",
+  "shape_types":["polygon","box"],
+  "layer_filter":[0],
+  "max_boxes":200000,
+  "merge_boxes":true
+}
+```
+
+### Result
+```json
+{
+  "boxes":[
+    {
+      "bbox":[1000,2000,2000,2500],
+      "points":[[1000,2000],[2000,2000],[2000,2500],[1000,2500]],
+      "layer_index":0,
+      "hierarchy_path":["CHILD"],
+      "shape_type":"polygon"
+    }
+  ],
+  "unit":"dbu",
+  "count":1,
+  "truncated":false
+}
+```
+
+### Notes
+- `unit` 目前只支援 `"dbu"`
+- 僅支援 **Manhattan/rectilinear polygon**；遇到斜邊會回 `InvalidParams`
+- `merge_boxes=true` 會合併垂直相鄰且 x-range 相同的 boxes，減少輸出數量
+- `max_boxes` 為 guardrail：超過會 `truncated=true` 並停止收集

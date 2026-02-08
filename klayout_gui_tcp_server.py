@@ -596,12 +596,40 @@ def _m_shape_create(_id, params):
                     {"field": "coords"},
                 )
             pts.append(pya.Point(p[0], p[1]))
-        # Use SimplePolygon for better compatibility with RecursiveShapeIterator
-        cell.shapes(li).insert(pya.SimplePolygon(pts))
+
+        holes = params.get("holes", None)
+        if holes is not None:
+            if not (isinstance(holes, list) and all(isinstance(h, list) and len(h) >= 3 for h in holes)):
+                return _err_std(
+                    _id,
+                    -32602,
+                    "Invalid params: holes must be [[[x,y],...], ...] with each hole having >=3 points",
+                    "InvalidParams",
+                    {"field": "holes"},
+                )
+
+        # Use Polygon to support holes when provided.
+        poly = pya.Polygon(pts)
+        if holes:
+            for h in holes:
+                hpts = []
+                for p in h:
+                    if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
+                        return _err_std(
+                            _id,
+                            -32602,
+                            "Invalid params: hole point must be [x,y] (int DBU)",
+                            "InvalidParams",
+                            {"field": "holes"},
+                        )
+                    hpts.append(pya.Point(p[0], p[1]))
+                poly.insert_hole(hpts)
+
+        cell.shapes(li).insert(poly)
         _gui_refresh("shape.create(polygon)")
         return _jsonrpc_result(
             _id,
-            {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li)},
+            {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li), "holes": int(poly.holes())},
         )
 
     if shape_type == "path":
@@ -1790,6 +1818,301 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
         pass
 
     return None, None
+
+
+# -----------------------------------------------------------------------------
+# Boxes (exact, DBU) decomposition for Manhattan polygons
+# -----------------------------------------------------------------------------
+
+
+def _box_points_from_bbox(bbox):
+    x1, y1, x2, y2 = bbox
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+
+def _is_manhattan_polygon(poly):
+    # Hull + holes edges must be axis-aligned.
+    try:
+        for e in poly.each_edge():
+            p1 = e.p1
+            p2 = e.p2
+            if not (p1.x == p2.x or p1.y == p2.y):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _polygon_to_boxes_dbu(poly, trans):
+    """Decompose a Manhattan polygon (possibly with holes) into boxes.
+
+    Coordinates are in DBU; transformation is applied into start_cell coordinates.
+    Boxes are returned as [x1,y1,x2,y2].
+    """
+    # Collect vertical edges after transform.
+    v_edges = []  # (x, y_lo, y_hi)
+    ys = set()
+
+    for e in poly.each_edge():
+        p1 = trans * e.p1
+        p2 = trans * e.p2
+        ys.add(int(p1.y))
+        ys.add(int(p2.y))
+        if int(p1.x) == int(p2.x):
+            y1 = int(p1.y)
+            y2 = int(p2.y)
+            if y1 == y2:
+                continue
+            y_lo, y_hi = (y1, y2) if y1 < y2 else (y2, y1)
+            v_edges.append((int(p1.x), y_lo, y_hi))
+
+    y_list = sorted(ys)
+    boxes = []
+
+    for i in range(len(y_list) - 1):
+        y0 = y_list[i]
+        y1 = y_list[i + 1]
+        if y1 <= y0:
+            continue
+        ymid = (y0 + y1) / 2.0
+
+        xs = []
+        for x, lo, hi in v_edges:
+            # Include if band midpoint is strictly inside edge span.
+            if lo < ymid < hi:
+                xs.append(x)
+        xs.sort()
+
+        # Pair intersections.
+        for j in range(0, len(xs) - 1, 2):
+            x1a = xs[j]
+            x2a = xs[j + 1]
+            if x2a <= x1a:
+                continue
+            boxes.append([x1a, y0, x2a, y1])
+
+    return boxes
+
+
+def _merge_boxes_vertical(boxes):
+    """Merge vertically adjacent boxes that share identical x1/x2."""
+    if not boxes:
+        return []
+
+    groups = {}
+    for b in boxes:
+        x1, y1, x2, y2 = b
+        groups.setdefault((x1, x2), []).append((y1, y2))
+
+    merged = []
+    for (x1, x2), ys in groups.items():
+        ys.sort()
+        cur_y1, cur_y2 = ys[0]
+        for y1, y2 in ys[1:]:
+            if y1 == cur_y2:
+                cur_y2 = y2
+            else:
+                merged.append([x1, cur_y1, x2, cur_y2])
+                cur_y1, cur_y2 = y1, y2
+        merged.append([x1, cur_y1, x2, cur_y2])
+
+    return merged
+
+
+def _shape_to_boxes_dbu(shape, trans):
+    """Return (boxes, kind) in DBU for box/polygon.
+
+    kind: "box" | "polygon" | "non_manhattan" | None
+    """
+    # Box
+    try:
+        if callable(getattr(shape, "is_box", None)) and shape.is_box():
+            box = _maybe_call(getattr(shape, "box", None))
+            if box is None:
+                return [], None
+            b = box.transformed(trans)
+            return [[int(b.left), int(b.bottom), int(b.right), int(b.top)]], "box"
+    except Exception:
+        pass
+
+    # Polygon
+    poly = None
+    try:
+        if callable(getattr(shape, "is_polygon", None)) and shape.is_polygon():
+            poly = _maybe_call(getattr(shape, "polygon", None))
+    except Exception:
+        poly = None
+
+    if poly is None:
+        # try simple polygon wrapper
+        try:
+            sp = _maybe_call(getattr(shape, "simple_polygon", None))
+            if sp is not None:
+                poly = pya.Polygon(sp)
+        except Exception:
+            poly = None
+
+    if poly is not None:
+        if not _is_manhattan_polygon(poly):
+            return [], "non_manhattan"
+        boxes = _polygon_to_boxes_dbu(poly, trans)
+        boxes = _merge_boxes_vertical(boxes)
+        return boxes, "polygon"
+
+    return [], None
+
+
+def _m_hier_shapes_rec_boxes(_id, params):
+    """Recursively visit shapes and return exact box decomposition (DBU).
+
+    Params:
+      start_cell: string (required)
+      unit: "dbu" (optional, default "dbu")
+      shape_types: ["box","polygon"] (optional, default both)
+      layer_filter: int[] (optional)
+      max_boxes: int (optional, default 200000)
+      merge_boxes: bool (optional, default true)
+
+    Returns:
+      {"boxes": [...], "unit": "dbu", "count": N, "truncated": bool}
+
+    Box record:
+      {"bbox": [x1,y1,x2,y2], "points": [[x,y]...], "layer_index": int, "hierarchy_path": string[]}
+
+    Notes:
+      - Only supports Manhattan polygons for exact decomposition.
+      - Polygons with holes are supported.
+    """
+    err = _require_active_layout(_id)
+    if err:
+        return err
+
+    params, perr = _ensure_params_object(_id, params)
+    if perr:
+        return perr
+
+    start_cell = params.get("start_cell", None)
+    unit = params.get("unit", "dbu")
+    shape_types = params.get("shape_types", None)
+    layer_filter = params.get("layer_filter", None)
+    max_boxes = params.get("max_boxes", 200000)
+    merge_boxes = params.get("merge_boxes", True)
+
+    if not isinstance(start_cell, str) or not start_cell:
+        return _err_std(_id, -32602, "Invalid params: start_cell must be non-empty string", "InvalidParams", {"field": "start_cell"})
+
+    if unit != "dbu":
+        return _err_std(_id, -32602, "Invalid params: unit must be 'dbu'", "InvalidParams", {"field": "unit", "got": unit})
+
+    allowed_types = ("polygon", "box")
+    if shape_types is None:
+        shape_types = list(allowed_types)
+    if not (isinstance(shape_types, list) and all(isinstance(x, str) and x in allowed_types for x in shape_types)):
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: shape_types must be a list of polygon|box",
+            "InvalidParams",
+            {"field": "shape_types", "allowed": list(allowed_types), "got": shape_types},
+        )
+
+    if layer_filter is not None:
+        if not (isinstance(layer_filter, list) and all(isinstance(x, int) and x >= 0 for x in layer_filter)):
+            return _err_std(_id, -32602, "Invalid params: layer_filter must be int[]", "InvalidParams", {"field": "layer_filter"})
+
+    if not isinstance(max_boxes, int) or max_boxes < 1:
+        return _err_std(_id, -32602, "Invalid params: max_boxes must be int >= 1", "InvalidParams", {"field": "max_boxes"})
+
+    if not isinstance(merge_boxes, bool):
+        return _err_std(_id, -32602, "Invalid params: merge_boxes must be boolean", "InvalidParams", {"field": "merge_boxes"})
+
+    if not _STATE.layout.has_cell(start_cell):
+        return _err(_id, -32002, f"Cell not found: {start_cell}", "CellNotFound", {"name": start_cell})
+
+    cell = _STATE.layout.cell(start_cell)
+
+    # default: all layers
+    if layer_filter is None:
+        try:
+            layer_filter = list(range(int(_STATE.layout.layers())))
+        except Exception:
+            layer_filter = []
+
+    boxes_out = []
+    truncated = False
+
+    try:
+        for lyr in layer_filter:
+            if len(boxes_out) >= max_boxes:
+                truncated = True
+                break
+
+            try:
+                it = pya.RecursiveShapeIterator(_STATE.layout, cell, int(lyr))
+            except Exception:
+                try:
+                    it = cell.begin_shapes_rec(int(lyr))
+                except Exception as e:
+                    return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
+
+            while not it.at_end():
+                if len(boxes_out) >= max_boxes:
+                    truncated = True
+                    break
+
+                shape = _maybe_call(getattr(it, "shape", None))
+                trans = _maybe_call(getattr(it, "trans", None))
+                inst_path = _maybe_call(getattr(it, "inst_path", None))
+                if shape is None or trans is None:
+                    it.next()
+                    continue
+
+                boxes, kind = _shape_to_boxes_dbu(shape, trans)
+                if kind == "non_manhattan":
+                    return _err_std(
+                        _id,
+                        -32602,
+                        "Invalid params: encountered non-Manhattan polygon; exact box decomposition requires rectilinear polygons",
+                        "InvalidParams",
+                        {"field": "shape", "reason": "non_manhattan"},
+                    )
+
+                if kind is None or kind not in shape_types:
+                    it.next()
+                    continue
+
+                if not merge_boxes and kind == "polygon":
+                    # rebuild without vertical merge
+                    poly = _maybe_call(getattr(shape, "polygon", None))
+                    if poly is not None:
+                        boxes = _polygon_to_boxes_dbu(poly, trans)
+
+                hp = _inst_path_to_cell_names(inst_path)
+
+                for bb in boxes:
+                    if len(boxes_out) >= max_boxes:
+                        truncated = True
+                        break
+                    bbox = [int(bb[0]), int(bb[1]), int(bb[2]), int(bb[3])]
+                    boxes_out.append(
+                        {
+                            "bbox": bbox,
+                            "points": _box_points_from_bbox(bbox),
+                            "layer_index": int(lyr),
+                            "hierarchy_path": hp,
+                            "shape_type": kind,
+                        }
+                    )
+
+                it.next()
+
+    except Exception as e:
+        return _err(_id, -32099, f"Internal error: {e}", "InternalError")
+
+    return _jsonrpc_result(
+        _id,
+        {"boxes": boxes_out, "unit": "dbu", "count": int(len(boxes_out)), "truncated": bool(truncated)},
+    )
 
 
 def _m_hier_shapes_rec(_id, params):
@@ -3118,6 +3441,7 @@ _METHODS.update(
         "hier.query_down_stats": _m_hier_query_down_stats,
         "hier.query_up_paths": _m_hier_query_up_paths,
         "hier.shapes_rec": _m_hier_shapes_rec,
+        "hier.shapes_rec_boxes": _m_hier_shapes_rec_boxes,
     }
 )
 
