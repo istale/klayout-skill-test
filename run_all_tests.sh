@@ -15,7 +15,8 @@ set -euo pipefail
 #   KLAYOUT_SERVER_PORT port to bind
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PORT="5055"
+PORT_BASE="5055"
+PORT="$PORT_BASE"
 
 KLAYOUT_BIN_DEFAULT="/home/istale/klayout-build/0.30.5-qt5/klayout"
 KLAYOUT_HOME_DEFAULT="/home/istale/klayout-build/0.30.5-qt5"
@@ -26,7 +27,7 @@ KLAYOUT_HOME="${KLAYOUT_HOME:-$KLAYOUT_HOME_DEFAULT}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)
-      PORT="$2"; shift 2;;
+      PORT_BASE="$2"; PORT="$PORT_BASE"; shift 2;;
     --klayout)
       KLAYOUT_BIN="$2"; shift 2;;
     -h|--help)
@@ -41,6 +42,8 @@ export LD_LIBRARY_PATH="$KLAYOUT_HOME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 start_server() {
   echo "[run_all_tests] starting server on port $PORT"
+  export KLAYOUT_SERVER_PORT="$PORT"
+
   # Start in background. We expect to kill it after a test.
   (cd "$ROOT_DIR" && KLAYOUT_SERVER_PORT="$PORT" "$KLAYOUT_BIN" -e -rm klayout_gui_tcp_server.py) &
   SERVER_PID=$!
@@ -72,6 +75,7 @@ stop_server() {
     # Wait up to ~2s for exit.
     for _ in {1..20}; do
       if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        wait "$SERVER_PID" 2>/dev/null || true
         unset SERVER_PID
         return 0
       fi
@@ -83,20 +87,29 @@ stop_server() {
 
     for _ in {1..20}; do
       if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        wait "$SERVER_PID" 2>/dev/null || true
         unset SERVER_PID
         return 0
       fi
       sleep 0.1
     done
 
+    # Reap anyway.
+    wait "$SERVER_PID" 2>/dev/null || true
+
     echo "[run_all_tests] WARN: server pid still alive after SIGKILL: $SERVER_PID" >&2
     unset SERVER_PID
   fi
 }
 
+TEST_INDEX=0
+
 run_one() {
   local test_py="$1"
-  echo "[run_all_tests] === $test_py ==="
+  PORT=$((PORT_BASE + TEST_INDEX))
+  TEST_INDEX=$((TEST_INDEX + 1))
+
+  echo "[run_all_tests] === $test_py (port $PORT) ==="
   start_server
   (cd "$ROOT_DIR" && python3 "$test_py" "$PORT")
   stop_server
@@ -121,5 +134,6 @@ run_one test_client_jsonrpc_req7_view_set_viewport.py
 run_one test_client_jsonrpc_req7_layout_render_png.py
 run_one test_client_jsonrpc_hier_shapes_rec_begin.py
 run_one test_client_jsonrpc_reqX_hier_shapes_rec_boxes.py
+run_one test_client_jsonrpc_reqX_hier_shapes_rec_boxes_path.py
 
 echo "[run_all_tests] ALL OK"

@@ -1719,10 +1719,57 @@ def _hierarchy_path_from_iter(layout, start_cell_name, it):
 
 def _shape_points_um_and_bbox(shape, trans, dbu):
     """Return (kind, payload_dict) or (None, None) if unsupported."""
+
+    # Box first (avoid misclassifying boxes as polygons on some builds)
+    try:
+        if callable(getattr(shape, "is_box", None)) and shape.is_box():
+            box = _maybe_call(getattr(shape, "box", None))
+            if box is None:
+                return None, None
+            b = box.transformed(trans)
+            pts = [
+                [float(b.left) * dbu, float(b.bottom) * dbu],
+                [float(b.right) * dbu, float(b.bottom) * dbu],
+                [float(b.right) * dbu, float(b.top) * dbu],
+                [float(b.left) * dbu, float(b.top) * dbu],
+            ]
+            return "box", {"points_um": pts, "bbox_um": [pts[0][0], pts[0][1], pts[2][0], pts[2][1]]}
+    except Exception:
+        pass
+
+    # Path
+    try:
+        if callable(getattr(shape, "is_path", None)) and shape.is_path():
+            path = _maybe_call(getattr(shape, "path", None))
+            if path is None:
+                return None, None
+
+            pts = []
+            try:
+                for p in path.each_point():
+                    tp = trans * p
+                    pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+            except Exception:
+                try:
+                    n = int(_maybe_call(getattr(path, "num_points", None)) or 0)
+                    for i in range(n):
+                        p = _maybe_call(getattr(path, "point", None), i)
+                        tp = trans * p
+                        pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
+                except Exception:
+                    pts = []
+
+            if not pts:
+                return None, None
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            width_um = float(_maybe_call(getattr(path, "width", None)) or 0.0) * dbu
+            return "path", {"points_um": pts, "width_um": width_um, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+    except Exception:
+        pass
+
     # Polygon / SimplePolygon
     try:
-        # Be permissive across KLayout versions: try to obtain polygon-like geometry
-        # even when is_polygon/is_simple_polygon is unavailable or unreliable.
         poly = None
         try:
             poly = _maybe_call(getattr(shape, "polygon", None))
@@ -1743,77 +1790,24 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
             except Exception:
                 pts = []
 
-        # Fallback: derive a bbox if polygon point iteration isn't available.
-        if not pts:
-            try:
-                bb = _maybe_call(getattr(shape, "bbox", None))
-                if bb is not None:
-                    bbt = bb.transformed(trans)
-                    pts = [
-                        [float(bbt.left) * dbu, float(bbt.bottom) * dbu],
-                        [float(bbt.right) * dbu, float(bbt.bottom) * dbu],
-                        [float(bbt.right) * dbu, float(bbt.top) * dbu],
-                        [float(bbt.left) * dbu, float(bbt.top) * dbu],
-                    ]
-            except Exception:
-                pts = []
-
         if pts:
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
             return "polygon", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
-    except Exception:
-        pass
 
-    # Box
-    try:
-        if callable(getattr(shape, "is_box", None)) and shape.is_box():
-            box = _maybe_call(getattr(shape, "box", None))
-            if box is None:
-                return None, None
-            b = box.transformed(trans)
+        # Fallback: bbox only (still call it polygon-like)
+        bb = _maybe_call(getattr(shape, "bbox", None))
+        if bb is not None:
+            bbt = bb.transformed(trans)
             pts = [
-                [float(b.left) * dbu, float(b.bottom) * dbu],
-                [float(b.right) * dbu, float(b.bottom) * dbu],
-                [float(b.right) * dbu, float(b.top) * dbu],
-                [float(b.left) * dbu, float(b.top) * dbu],
+                [float(bbt.left) * dbu, float(bbt.bottom) * dbu],
+                [float(bbt.right) * dbu, float(bbt.bottom) * dbu],
+                [float(bbt.right) * dbu, float(bbt.top) * dbu],
+                [float(bbt.left) * dbu, float(bbt.top) * dbu],
             ]
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
-            return "box", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
-    except Exception:
-        pass
-
-    # Path
-    try:
-        if callable(getattr(shape, "is_path", None)) and shape.is_path():
-            path = _maybe_call(getattr(shape, "path", None))
-            if path is None:
-                return None, None
-
-            pts = []
-            # KLayout API varies a bit across versions; try multiple ways to get points.
-            try:
-                it = path.each_point()
-                for p in it:
-                    tp = trans * p
-                    pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
-            except Exception:
-                try:
-                    n = int(_maybe_call(getattr(path, "num_points", None)) or 0)
-                    for i in range(n):
-                        p = _maybe_call(getattr(path, "point", None), i)
-                        tp = trans * p
-                        pts.append([float(tp.x) * dbu, float(tp.y) * dbu])
-                except Exception:
-                    pts = []
-
-            if not pts:
-                return None, None
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            width_um = float(_maybe_call(getattr(path, "width", None)) or 0.0) * dbu
-            return "path", {"points_um": pts, "width_um": width_um, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+            return "polygon", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
     except Exception:
         pass
 
