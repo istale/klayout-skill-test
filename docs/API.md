@@ -682,7 +682,7 @@ Rendering options（傳給 `save_image_with_options`）：
 {
   "start_cell":"TOP",
   "unit":"dbu",
-  "shape_types":["polygon","box"],
+  "shape_types":["polygon","box","path"],
   "layer_filter":[0],
   "max_boxes":200000,
   "merge_boxes":true
@@ -711,4 +711,5 @@ Rendering options（傳給 `save_image_with_options`）：
 - `unit` 目前只支援 `"dbu"`
 - 僅支援 **Manhattan/rectilinear polygon**；遇到斜邊會回 `InvalidParams`
 - `merge_boxes=true` 會合併垂直相鄰且 x-range 相同的 boxes，減少輸出數量
+- `shape_types` 可包含 `"path"`：會使用 KLayout 內建 path → polygon 的結果再進行 box 分解（因此 join/extension 行為與 KLayout 一致）
 - `max_boxes` 為 guardrail：超過會 `truncated=true` 並停止收集

@@ -1919,10 +1919,56 @@ def _merge_boxes_vertical(boxes):
     return merged
 
 
-def _shape_to_boxes_dbu(shape, trans):
-    """Return (boxes, kind) in DBU for box/polygon.
+def _union_rects_to_boxes(rects):
+    """Compute exact union of axis-aligned rectangles and return as merged boxes.
 
-    kind: "box" | "polygon" | "non_manhattan" | None
+    rects: list of [x1,y1,x2,y2] (DBU)
+
+    This is a scanline union which naturally handles overlaps.
+    """
+    if not rects:
+        return []
+
+    ys = sorted({int(y) for r in rects for y in (r[1], r[3])})
+    if len(ys) < 2:
+        return []
+
+    out = []
+    for i in range(len(ys) - 1):
+        y0, y1 = ys[i], ys[i + 1]
+        if y1 <= y0:
+            continue
+        ymid = (y0 + y1) / 2.0
+
+        intervals = []
+        for x1, ry1, x2, ry2 in rects:
+            if ry1 < ymid < ry2 and x2 > x1:
+                intervals.append((int(x1), int(x2)))
+        if not intervals:
+            continue
+
+        intervals.sort()
+        merged_int = []
+        cx1, cx2 = intervals[0]
+        for x1, x2 in intervals[1:]:
+            if x1 <= cx2:
+                cx2 = max(cx2, x2)
+            else:
+                merged_int.append((cx1, cx2))
+                cx1, cx2 = x1, x2
+        merged_int.append((cx1, cx2))
+
+        for x1, x2 in merged_int:
+            if x2 > x1:
+                out.append([x1, y0, x2, y1])
+
+    return _merge_boxes_vertical(out)
+
+
+def _shape_to_boxes_dbu(shape, trans):
+    """Return (boxes, kind) in DBU for box/polygon/path.
+
+    kind: "box" | "polygon" | "path" | "non_manhattan" | None
     """
     # Box
     try:
@@ -1932,6 +1978,41 @@ def _shape_to_boxes_dbu(shape, trans):
                 return [], None
             b = box.transformed(trans)
             return [[int(b.left), int(b.bottom), int(b.right), int(b.top)]], "box"
+    except Exception:
+        pass
+
+    # Path (MUST come before polygon because some KLayout builds expose a
+    # polygonized representation for paths via shape.polygon/simple_polygon)
+    try:
+        if callable(getattr(shape, "is_path", None)) and shape.is_path():
+            # Strategy A: let KLayout convert the path to a polygon, then decompose.
+            path = _maybe_call(getattr(shape, "path", None))
+            if path is None:
+                return [], None
+
+            poly = None
+            try:
+                poly = _maybe_call(getattr(path, "polygon", None))
+            except Exception:
+                poly = None
+
+            if poly is None:
+                try:
+                    sp = _maybe_call(getattr(path, "simple_polygon", None))
+                    if sp is not None:
+                        poly = pya.Polygon(sp)
+                except Exception:
+                    poly = None
+
+            if poly is None:
+                return [], None
+
+            if not _is_manhattan_polygon(poly):
+                return [], "non_manhattan"
+
+            boxes = _polygon_to_boxes_dbu(poly, trans)
+            boxes = _merge_boxes_vertical(boxes)
+            return boxes, "path"
     except Exception:
         pass
 
@@ -1958,6 +2039,8 @@ def _shape_to_boxes_dbu(shape, trans):
         boxes = _polygon_to_boxes_dbu(poly, trans)
         boxes = _merge_boxes_vertical(boxes)
         return boxes, "polygon"
+
+    # (path handled above)
 
     return [], None
 
@@ -2004,14 +2087,14 @@ def _m_hier_shapes_rec_boxes(_id, params):
     if unit != "dbu":
         return _err_std(_id, -32602, "Invalid params: unit must be 'dbu'", "InvalidParams", {"field": "unit", "got": unit})
 
-    allowed_types = ("polygon", "box")
+    allowed_types = ("polygon", "box", "path")
     if shape_types is None:
         shape_types = list(allowed_types)
     if not (isinstance(shape_types, list) and all(isinstance(x, str) and x in allowed_types for x in shape_types)):
         return _err_std(
             _id,
             -32602,
-            "Invalid params: shape_types must be a list of polygon|box",
+            "Invalid params: shape_types must be a list of polygon|box|path",
             "InvalidParams",
             {"field": "shape_types", "allowed": list(allowed_types), "got": shape_types},
         )
@@ -2041,6 +2124,9 @@ def _m_hier_shapes_rec_boxes(_id, params):
     boxes_out = []
     truncated = False
 
+    debug = bool(params.get("debug", False))
+    dbg = {"seen": 0, "kinds": {"box": 0, "polygon": 0, "path": 0, "none": 0, "non_manhattan": 0}}
+
     try:
         for lyr in layer_filter:
             if len(boxes_out) >= max_boxes:
@@ -2049,9 +2135,19 @@ def _m_hier_shapes_rec_boxes(_id, params):
 
             try:
                 it = pya.RecursiveShapeIterator(_STATE.layout, cell, int(lyr))
+                # IMPORTANT: include paths/texts/etc. Some builds may default to a subset.
+                try:
+                    it.shape_flags = pya.Shapes.SAll
+                except Exception:
+                    pass
             except Exception:
                 try:
                     it = cell.begin_shapes_rec(int(lyr))
+                    # IMPORTANT: include paths/texts/etc. Some builds may default to a subset.
+                    try:
+                        it.shape_flags = pya.Shapes.SAll
+                    except Exception:
+                        pass
                 except Exception as e:
                     return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
 
@@ -2067,7 +2163,19 @@ def _m_hier_shapes_rec_boxes(_id, params):
                     it.next()
                     continue
 
+                if debug:
+                    dbg["seen"] += 1
+
                 boxes, kind = _shape_to_boxes_dbu(shape, trans)
+
+                if debug:
+                    if kind is None:
+                        dbg["kinds"]["none"] += 1
+                    elif kind == "non_manhattan":
+                        dbg["kinds"]["non_manhattan"] += 1
+                    else:
+                        dbg["kinds"][kind] = int(dbg["kinds"].get(kind, 0)) + 1
+
                 if kind == "non_manhattan":
                     return _err_std(
                         _id,
@@ -2109,10 +2217,10 @@ def _m_hier_shapes_rec_boxes(_id, params):
     except Exception as e:
         return _err(_id, -32099, f"Internal error: {e}", "InternalError")
 
-    return _jsonrpc_result(
-        _id,
-        {"boxes": boxes_out, "unit": "dbu", "count": int(len(boxes_out)), "truncated": bool(truncated)},
-    )
+    out = {"boxes": boxes_out, "unit": "dbu", "count": int(len(boxes_out)), "truncated": bool(truncated)}
+    if debug:
+        out["debug"] = dbg
+    return _jsonrpc_result(_id, out)
 
 
 def _m_hier_shapes_rec(_id, params):
@@ -2222,9 +2330,19 @@ def _m_hier_shapes_rec(_id, params):
             try:
                 # Prefer explicit RecursiveShapeIterator for better portability and inst_path support.
                 it = pya.RecursiveShapeIterator(_STATE.layout, cell, int(lyr))
+                # IMPORTANT: include paths/texts/etc. Some builds may default to a subset.
+                try:
+                    it.shape_flags = pya.Shapes.SAll
+                except Exception:
+                    pass
             except Exception:
                 try:
                     it = cell.begin_shapes_rec(int(lyr))
+                    # IMPORTANT: include paths/texts/etc. Some builds may default to a subset.
+                    try:
+                        it.shape_flags = pya.Shapes.SAll
+                    except Exception:
+                        pass
                 except Exception as e:
                     return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
 
