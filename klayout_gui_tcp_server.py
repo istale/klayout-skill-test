@@ -98,9 +98,26 @@ def _jsonrpc_error(_id, code, message, data=None):
 # - error.data.type provides a machine-readable error type
 
 def _err(_id, code, message, etype, data=None):
-    d = {"type": str(etype)}
-    if isinstance(data, dict):
-        d.update(data)
+    """req3+ error envelope.
+
+    Canonical schema:
+      error.data = {"type": <string>, "details": <object|null>}
+
+    Back-compat:
+      - If callers still pass a dict containing a top-level "type", we strip it
+        from details to avoid confusing duplication.
+    """
+    details = None
+    if data is None:
+        details = None
+    elif isinstance(data, dict):
+        # Back-compat: older call sites may include a "type" field in the payload.
+        details = {k: v for k, v in data.items() if k != "type"}
+    else:
+        # Allow non-dict details (rare); keep as-is.
+        details = data
+
+    d = {"type": str(etype), "details": details}
     return _jsonrpc_error(_id, code, message, d)
 
 
@@ -123,16 +140,10 @@ def _guardrail_too_many_results(_id, kind: str, limit: int, got_so_far: int, mes
     This is a design choice and not necessarily an indication that typical
     layouts are risky.
     """
-    payload = {"type": "TooManyResults", "kind": str(kind), "limit": int(limit), "got_so_far": int(got_so_far)}
+    payload = {"kind": str(kind), "limit": int(limit), "got_so_far": int(got_so_far)}
     if isinstance(data, dict):
         payload.update(data)
-    return _err(
-        _id,
-        -32030,
-        message,
-        "TooManyResults",
-        payload,
-    )
+    return _err(_id, -32030, message, "TooManyResults", payload)
 
 
 def _require_active_layout(_id):
