@@ -7,3 +7,11 @@ __pycache__/
 
 # Offline reference mirrors
 klayout-python/references/docs_html/
+klayout-python/references/docs_md/
+klayout-python-offline-skill.tar.gz
+
+# Local demos / exports
+*.gds
+
+# Local scratch
+tmp_*.txt
