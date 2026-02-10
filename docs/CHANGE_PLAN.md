@@ -10,6 +10,13 @@
 
 本文優先覆蓋 **High priority**；Medium/Low 放在後段當 backlog。
 
+## 重要前提（2026-02-10）
+- **目前尚未 release 給任何外部 client。**
+- 因此本計劃允許在短期內做 **breaking change**（以「規格一致性/可預期性」為優先），
+  但仍需：
+  - 在 `docs/API.md` 明確寫出規格
+  - 用測試固定住行為（避免未來真的 release 時自己打臉）
+
 ---
 
 ## 0. 基準資訊
@@ -211,6 +218,45 @@
 - bash + python readiness script 讀 env。
 
 ---
+
+## 9. 風險與推進策略（鋼鐵人複核整合）
+
+### 9.1 總體風險觀點
+- 由於目前未 release，**相容性風險主要是 repo 內測試與文件一致性**，而非外部 client。
+- 建議以 `error.data.type` 作為「穩定分類主鍵」，`error.code` 僅保證：
+  - 標準 JSON-RPC（-32700/-32600/-32601/-32602）
+  - 以及少數明確標記為 v0 合約的行為
+  其餘 server 自訂 code 是否收斂，採「對照表 + 測試覆蓋」後逐步收斂。
+
+### 9.2 各項目補強（要反映到前述章節）
+- ## 2（type↔code）：
+  - 目標文字建議改為：以 `type` 做主分類；`code` 逐步收斂，避免一次全改（就算目前未 release，也建議保留漸進機制，降低後續維護成本）。
+- ## 3（路徑一致化）：
+  - 先盤點所有「寫檔/輸出路徑」的 RPC（至少：`layout.export` / `layout.open` / `view.screenshot` / `layout.render_png`）。
+  - 明確定義與一致化副作用：
+    - 是否自動補副檔名
+    - 是否自動建立資料夾（mkdir -p）
+    - overwrite 規則
+    - relative path 的 base（建議固定 server 啟動 cwd realpath）
+- ## 4（merge_boxes）：
+  - 文件需定義「merge 的意義」（現況是垂直相鄰 boxes 合併）。
+  - 可驗收條件：`merge_boxes=false` 不做垂直合併；true/false 兩者 boxes **總面積一致**（在 Manhattan/無自交前提）。
+- ## 6（layer_indexes）：
+  - 補註：layer index 列舉順序是否影響輸出；若需穩定可 `sorted(layer_indexes)`。
+  - 點名受影響 methods（至少 `hier.shapes_rec` / `hier.shapes_rec_boxes`）。
+- ## 7（polling 取代 sleep）：
+  - 點名受影響測試檔：`test_client_jsonrpc_req7_view_screenshot.py`、`test_client_jsonrpc_req7_layout_render_png.py`、`test_client_jsonrpc_req7_set_hier_levels_compare.py`。
+  - polling 成功條件統一為：存在 + size>0 + timeout。
+- ## 8（server readiness env）：
+  - 明確寫出 env 名稱、預設值與套用段落，避免 future 修改 shell 漏接。
+
+### 9.3 建議推進順序（低風險高報酬優先）
+1. #6 layer_indexes（效能，改動小）
+2. #7/#8 測試穩定性（省大量時間）
+3. #3 路徑 resolver（先定規格與副作用）
+4. #4 merge_boxes（補測試+定義驗收）
+5. #5 polygon edge cases（先求不 silent wrong；可用 regression/fuzz 收斂）
+6. #2 code 收斂（最後做，或採漸進策略）
 
 # Backlog（Medium/Low）
 
