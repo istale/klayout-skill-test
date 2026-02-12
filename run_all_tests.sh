@@ -10,9 +10,10 @@ set -euo pipefail
 #   ./run_all_tests.sh [--port 5055] [--klayout /path/to/klayout]
 #
 # Environment overrides:
-#   KLAYOUT_BIN         path to klayout binary
-#   KLAYOUT_HOME        directory that contains KLayout libs (for LD_LIBRARY_PATH)
-#   KLAYOUT_SERVER_PORT port to bind
+#   KLAYOUT_BIN                    path to klayout binary
+#   KLAYOUT_HOME                   directory that contains KLayout libs (for LD_LIBRARY_PATH)
+#   KLAYOUT_SERVER_PORT            port to bind
+#   RUN_ALL_TESTS_SERVER_READY_S   server readiness timeout in seconds (default: 10)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_BASE="5055"
@@ -52,7 +53,8 @@ start_server() {
   python3 - <<'PY'
 import socket, os, time, sys
 port = int(os.environ.get('KLAYOUT_SERVER_PORT','5055'))
-deadline = time.time() + 5.0
+timeout_s = float(os.environ.get('RUN_ALL_TESTS_SERVER_READY_S','10'))
+deadline = time.time() + timeout_s
 while time.time() < deadline:
     try:
         s = socket.create_connection(('127.0.0.1', port), timeout=0.2)
@@ -118,23 +120,23 @@ run_one() {
 trap stop_server EXIT
 
 # Order: spec v0 first, then req3 tests.
-run_one test_client_jsonrpc_spec_v0.py
-run_one test_client_jsonrpc_req3_cell_create.py
-run_one test_client_jsonrpc_req3_instance_create.py
-run_one test_client_jsonrpc_req3_instance_array_create.py
-run_one test_client_jsonrpc_req4_generate_export_open.py
-run_one test_client_jsonrpc_req5_layout_info.py
-run_one test_client_jsonrpc_req6_hier_query_down.py
-run_one test_client_jsonrpc_req6_hier_query_down_deep.py
-run_one test_client_jsonrpc_req6_hier_query_up_paths.py
-run_one test_client_jsonrpc_req6_hier_query_down_expanded.py
-run_one test_client_jsonrpc_req6_hier_query_down_stats.py
-run_one test_client_jsonrpc_req7_view_screenshot.py
-run_one test_client_jsonrpc_req7_view_set_viewport.py
-run_one test_client_jsonrpc_req7_layout_render_png.py
-run_one test_client_jsonrpc_hier_shapes_rec_begin.py
-run_one test_client_jsonrpc_reqX_hier_shapes_rec_boxes.py
-run_one test_client_jsonrpc_reqX_hier_shapes_rec_boxes_path.py
-run_one test_client_jsonrpc_reqX_error_schema.py
+run_one tests/test_client_jsonrpc_spec_v0.py
+run_one tests/test_client_jsonrpc_req3_cell_create.py
+run_one tests/test_client_jsonrpc_req3_instance_create.py
+run_one tests/test_client_jsonrpc_req3_instance_array_create.py
+run_one tests/test_client_jsonrpc_req4_generate_export_open.py
+run_one tests/test_client_jsonrpc_req5_layout_info.py
+run_one tests/test_client_jsonrpc_req6_hier_query_down.py
+run_one tests/test_client_jsonrpc_req6_hier_query_down_deep.py
+run_one tests/test_client_jsonrpc_req6_hier_query_up_paths.py
+run_one tests/test_client_jsonrpc_req6_hier_query_down_expanded.py
+run_one tests/test_client_jsonrpc_req6_hier_query_down_stats.py
+run_one tests/test_client_jsonrpc_req7_view_screenshot.py
+run_one tests/test_client_jsonrpc_req7_view_set_viewport.py
+run_one tests/test_client_jsonrpc_req7_layout_render_png.py
+run_one tests/test_client_jsonrpc_hier_shapes_rec_begin.py
+run_one tests/test_client_jsonrpc_reqX_hier_shapes_rec_boxes.py
+run_one tests/test_client_jsonrpc_reqX_hier_shapes_rec_boxes_path.py
+run_one tests/test_client_jsonrpc_reqX_error_schema.py
 
 echo "[run_all_tests] ALL OK"

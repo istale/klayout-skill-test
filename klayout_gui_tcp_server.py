@@ -25,8 +25,8 @@ import pya
 # -----------------------------------------------------------------------------
 
 _SERVER = None
-_CLIENT = None          # QTcpSocket (single client)
-_CLIENT_STATE = None    # _ClientState (single client)
+_CLIENT = None  # QTcpSocket (single client)
+_CLIENT_STATE = None  # _ClientState (single client)
 
 # Server start directory (for path restrictions)
 _SERVER_CWD = os.getcwd()
@@ -37,11 +37,11 @@ class SessionState:
     """Server-side session state (single client, single in-memory layout)."""
 
     def __init__(self):
-        self.layout = None               # pya.Layout
-        self.layout_id = None            # string (v0 uses "L1")
-        self.layout_filename = None      # string | None (best-effort source filename)
-        self.top_cell = None             # pya.Cell
-        self.top_cell_name = None        # string
+        self.layout = None  # pya.Layout
+        self.layout_id = None  # string (v0 uses "L1")
+        self.layout_filename = None  # string | None (best-effort source filename)
+        self.top_cell = None  # pya.Cell
+        self.top_cell_name = None  # string
         self.current_layer_index = None  # int
 
 
@@ -97,6 +97,7 @@ def _jsonrpc_error(_id, code, message, data=None):
 # - error.message must contain the concrete reason
 # - error.data.type provides a machine-readable error type
 
+
 def _err(_id, code, message, etype, data=None):
     """req3+ error envelope.
 
@@ -130,7 +131,9 @@ def _jsonrpc_result(_id, result):
     return {"jsonrpc": "2.0", "id": _id, "result": result}
 
 
-def _guardrail_too_many_results(_id, kind: str, limit: int, got_so_far: int, message: str, data: dict | None = None):
+def _guardrail_too_many_results(
+    _id, kind: str, limit: int, got_so_far: int, message: str, data: dict | None = None
+):
     """Guardrail helper.
 
     'Guardrail' here means an intentional safety limit to prevent accidental
@@ -148,7 +151,9 @@ def _guardrail_too_many_results(_id, kind: str, limit: int, got_so_far: int, mes
 
 def _require_active_layout(_id):
     if _STATE.layout is None:
-        return _err(_id, -32001, "No active layout: call layout.new first", "NoActiveLayout")
+        return _err(
+            _id, -32001, "No active layout: call layout.new first", "NoActiveLayout"
+        )
     return None
 
 
@@ -161,7 +166,9 @@ def _ensure_params_object(_id, params):
     if params is None:
         return {}, None
     if not isinstance(params, dict):
-        return None, _err_std(_id, -32602, "Invalid params: params must be an object", "InvalidParams")
+        return None, _err_std(
+            _id, -32602, "Invalid params: params must be an object", "InvalidParams"
+        )
     return params, None
 
 
@@ -188,7 +195,13 @@ def _layer_index_from_params(layout, params, _id):
     layer_obj = params.get("layer", None)
     if layer_obj is not None:
         if not isinstance(layer_obj, dict):
-            return None, _err_std(_id, -32602, "Invalid params: layer must be an object", "InvalidParams", {"field": "layer"})
+            return None, _err_std(
+                _id,
+                -32602,
+                "Invalid params: layer must be an object",
+                "InvalidParams",
+                {"field": "layer"},
+            )
 
         ln = layer_obj.get("layer", 1)
         dt = layer_obj.get("datatype", 0)
@@ -239,7 +252,13 @@ def _resolve_cwd_path(_id, path):
     Returns: ({"rel": <original>, "abs": <realpath>}, error)
     """
     if not isinstance(path, str) or not path:
-        return None, _err_std(_id, -32602, "Invalid params: path must be a non-empty string", "InvalidParams", {"field": "path"})
+        return None, _err_std(
+            _id,
+            -32602,
+            "Invalid params: path must be a non-empty string",
+            "InvalidParams",
+            {"field": "path"},
+        )
 
     if os.path.isabs(path):
         full = path
@@ -302,7 +321,12 @@ def _trans_to_dict(t: "pya.Trans"):
 
 def _box_to_dict(b: "pya.Box"):
     try:
-        return {"x1": int(b.left), "y1": int(b.bottom), "x2": int(b.right), "y2": int(b.top)}
+        return {
+            "x1": int(b.left),
+            "y1": int(b.bottom),
+            "x2": int(b.right),
+            "y2": int(b.top),
+        }
     except Exception:
         # Fallback: try p1/p2.
         try:
@@ -418,7 +442,13 @@ def _m_layout_new(_id, params):
         )
     dbu = float(dbu)
     if dbu <= 0:
-        return _err_std(_id, -32602, "Invalid params: dbu must be > 0", "InvalidParams", {"field": "dbu"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: dbu must be > 0",
+            "InvalidParams",
+            {"field": "dbu"},
+        )
 
     if not isinstance(top_cell_name, str) or not top_cell_name:
         return _err_std(
@@ -461,7 +491,9 @@ def _m_layout_new(_id, params):
 
     _gui_refresh("layout.new")
 
-    return _jsonrpc_result(_id, {"layout_id": "L1", "dbu": dbu, "top_cell": top_cell_name})
+    return _jsonrpc_result(
+        _id, {"layout_id": "L1", "dbu": dbu, "top_cell": top_cell_name}
+    )
 
 
 def _m_layer_new(_id, params):
@@ -487,7 +519,13 @@ def _m_layer_new(_id, params):
             {"field": "layer"},
         )
     if nm is not None and not isinstance(nm, str):
-        return _err_std(_id, -32602, "Invalid params: name must be string or null", "InvalidParams", {"field": "name"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: name must be string or null",
+            "InvalidParams",
+            {"field": "name"},
+        )
     if not isinstance(as_current, bool):
         return _err_std(
             _id,
@@ -509,7 +547,9 @@ def _m_layer_new(_id, params):
 
     _gui_refresh("layer.new")
 
-    return _jsonrpc_result(_id, {"layer_index": li, "layer": ln, "datatype": dt, "name": nm})
+    return _jsonrpc_result(
+        _id, {"layer_index": li, "layer": ln, "datatype": dt, "name": nm}
+    )
 
 
 def _m_cell_create(_id, params):
@@ -528,10 +568,22 @@ def _m_cell_create(_id, params):
 
     name = params.get("name", None)
     if not isinstance(name, str) or not name:
-        return _err(_id, -32000, "Invalid params: name must be a non-empty string", "InvalidParams", {"field": "name"})
+        return _err(
+            _id,
+            -32000,
+            "Invalid params: name must be a non-empty string",
+            "InvalidParams",
+            {"field": "name"},
+        )
 
     if _STATE.layout.has_cell(name):
-        return _err(_id, -32000, f"Cell already exists: {name}", "CellAlreadyExists", {"name": name})
+        return _err(
+            _id,
+            -32000,
+            f"Cell already exists: {name}",
+            "CellAlreadyExists",
+            {"name": name},
+        )
 
     _STATE.layout.create_cell(name)
     _gui_refresh("cell.create")
@@ -549,10 +601,22 @@ def _m_shape_create(_id, params):
 
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
-        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: cell must be a non-empty string",
+            "InvalidParams",
+            {"field": "cell"},
+        )
 
     if not _STATE.layout.has_cell(cell_name):
-        return _err(_id, -32002, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
+        return _err(
+            _id,
+            -32002,
+            f"Cell not found: {cell_name}",
+            "CellNotFound",
+            {"name": cell_name},
+        )
 
     cell = _STATE.layout.cell(cell_name)
 
@@ -574,7 +638,11 @@ def _m_shape_create(_id, params):
     coords = params.get("coords", None)
 
     if shape_type == "box":
-        if not (isinstance(coords, list) and len(coords) == 4 and all(isinstance(v, int) for v in coords)):
+        if not (
+            isinstance(coords, list)
+            and len(coords) == 4
+            and all(isinstance(v, int) for v in coords)
+        ):
             return _err_std(
                 _id,
                 -32602,
@@ -585,7 +653,15 @@ def _m_shape_create(_id, params):
         x1, y1, x2, y2 = coords
         cell.shapes(li).insert(pya.Box(x1, y1, x2, y2))
         _gui_refresh("shape.create(box)")
-        return _jsonrpc_result(_id, {"inserted": True, "type": "box", "cell": cell_name, "layer_index": int(li)})
+        return _jsonrpc_result(
+            _id,
+            {
+                "inserted": True,
+                "type": "box",
+                "cell": cell_name,
+                "layer_index": int(li),
+            },
+        )
 
     if shape_type == "polygon":
         if not (isinstance(coords, list) and len(coords) >= 3):
@@ -598,7 +674,12 @@ def _m_shape_create(_id, params):
             )
         pts = []
         for p in coords:
-            if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
+            if not (
+                isinstance(p, list)
+                and len(p) == 2
+                and isinstance(p[0], int)
+                and isinstance(p[1], int)
+            ):
                 return _err_std(
                     _id,
                     -32602,
@@ -610,7 +691,10 @@ def _m_shape_create(_id, params):
 
         holes = params.get("holes", None)
         if holes is not None:
-            if not (isinstance(holes, list) and all(isinstance(h, list) and len(h) >= 3 for h in holes)):
+            if not (
+                isinstance(holes, list)
+                and all(isinstance(h, list) and len(h) >= 3 for h in holes)
+            ):
                 return _err_std(
                     _id,
                     -32602,
@@ -625,7 +709,12 @@ def _m_shape_create(_id, params):
             for h in holes:
                 hpts = []
                 for p in h:
-                    if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
+                    if not (
+                        isinstance(p, list)
+                        and len(p) == 2
+                        and isinstance(p[0], int)
+                        and isinstance(p[1], int)
+                    ):
                         return _err_std(
                             _id,
                             -32602,
@@ -640,7 +729,13 @@ def _m_shape_create(_id, params):
         _gui_refresh("shape.create(polygon)")
         return _jsonrpc_result(
             _id,
-            {"inserted": True, "type": "polygon", "cell": cell_name, "layer_index": int(li), "holes": int(poly.holes())},
+            {
+                "inserted": True,
+                "type": "polygon",
+                "cell": cell_name,
+                "layer_index": int(li),
+                "holes": int(poly.holes()),
+            },
         )
 
     if shape_type == "path":
@@ -663,7 +758,12 @@ def _m_shape_create(_id, params):
             )
         pts = []
         for p in coords:
-            if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], int) and isinstance(p[1], int)):
+            if not (
+                isinstance(p, list)
+                and len(p) == 2
+                and isinstance(p[0], int)
+                and isinstance(p[1], int)
+            ):
                 return _err_std(
                     _id,
                     -32602,
@@ -676,7 +776,13 @@ def _m_shape_create(_id, params):
         _gui_refresh("shape.create(path)")
         return _jsonrpc_result(
             _id,
-            {"inserted": True, "type": "path", "cell": cell_name, "layer_index": int(li), "width": int(width)},
+            {
+                "inserted": True,
+                "type": "path",
+                "cell": cell_name,
+                "layer_index": int(li),
+                "width": int(width),
+            },
         )
 
     return _err_std(
@@ -696,9 +802,21 @@ def _resolve_screenshot_path(_id, path):
     - Default extension is .png (if not provided).
     """
     if path is None:
-        return None, _err_std(_id, -32602, "Invalid params: path is required", "InvalidParams", {"field": "path"})
+        return None, _err_std(
+            _id,
+            -32602,
+            "Invalid params: path is required",
+            "InvalidParams",
+            {"field": "path"},
+        )
     if not isinstance(path, str) or not path:
-        return None, _err_std(_id, -32602, "Invalid params: path must be a non-empty string", "InvalidParams", {"field": "path"})
+        return None, _err_std(
+            _id,
+            -32602,
+            "Invalid params: path must be a non-empty string",
+            "InvalidParams",
+            {"field": "path"},
+        )
 
     rel = path
     if not rel.lower().endswith(".png"):
@@ -707,13 +825,21 @@ def _resolve_screenshot_path(_id, path):
     abs_p = os.path.abspath(os.path.join(os.getcwd(), rel))
     cwd = os.path.abspath(os.getcwd())
     if os.path.commonpath([abs_p, cwd]) != cwd:
-        return None, _err(_id, -32015, f"Invalid path (outside cwd): {rel}", "InvalidPath", {"path": rel})
+        return None, _err(
+            _id,
+            -32015,
+            f"Invalid path (outside cwd): {rel}",
+            "InvalidPath",
+            {"path": rel},
+        )
 
     # ensure parent dir exists
     try:
         os.makedirs(os.path.dirname(abs_p) or cwd, exist_ok=True)
     except Exception as e:
-        return None, _err(_id, -32099, f"Failed to create directory: {e}", "InternalError")
+        return None, _err(
+            _id, -32099, f"Failed to create directory: {e}", "InternalError"
+        )
 
     return {"rel": rel, "abs": abs_p}, None
 
@@ -731,7 +857,13 @@ def _m_layout_export(_id, params):
     overwrite = params.get("overwrite", True)
 
     if not isinstance(overwrite, bool):
-        return _err_std(_id, -32602, "Invalid params: overwrite must be boolean", "InvalidParams", {"field": "overwrite"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: overwrite must be boolean",
+            "InvalidParams",
+            {"field": "overwrite"},
+        )
 
     resolved, perr = _resolve_export_path(_id, path)
     if perr:
@@ -766,7 +898,12 @@ def _make_dbox(layout, units, box=None, center=None, size=None):
     """Build a DBox in micron units from either box=[x1,y1,x2,y2] or center/size."""
     if box is not None:
         x1, y1, x2, y2 = box
-        return pya.DBox(_to_um(layout, x1, units), _to_um(layout, y1, units), _to_um(layout, x2, units), _to_um(layout, y2, units))
+        return pya.DBox(
+            _to_um(layout, x1, units),
+            _to_um(layout, y1, units),
+            _to_um(layout, x2, units),
+            _to_um(layout, y2, units),
+        )
     if center is not None and size is not None:
         cx, cy = center
         w, h = size
@@ -830,37 +967,127 @@ def _m_view_screenshot(_id, params):
     overwrite = params.get("overwrite", True)
 
     if viewport_mode not in ("fit", "box", "center_size", "relative"):
-        return _err_std(_id, -32602, "Invalid params: viewport_mode must be fit|box|center_size|relative", "InvalidParams", {"field": "viewport_mode", "got": viewport_mode})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: viewport_mode must be fit|box|center_size|relative",
+            "InvalidParams",
+            {"field": "viewport_mode", "got": viewport_mode},
+        )
     if units not in ("um", "dbu"):
-        return _err_std(_id, -32602, "Invalid params: units must be um|dbu", "InvalidParams", {"field": "units", "got": units})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: units must be um|dbu",
+            "InvalidParams",
+            {"field": "units", "got": units},
+        )
 
     if not isinstance(width, int) or width < 1:
-        return _err_std(_id, -32602, "Invalid params: width must be int >= 1", "InvalidParams", {"field": "width", "got": width})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: width must be int >= 1",
+            "InvalidParams",
+            {"field": "width", "got": width},
+        )
     if not isinstance(height, int) or height < 1:
-        return _err_std(_id, -32602, "Invalid params: height must be int >= 1", "InvalidParams", {"field": "height", "got": height})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: height must be int >= 1",
+            "InvalidParams",
+            {"field": "height", "got": height},
+        )
 
     if viewport_mode == "box":
-        if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
-            return _err_std(_id, -32602, "Invalid params: box must be [x1,y1,x2,y2]", "InvalidParams", {"field": "box", "got": box})
+        if not (
+            isinstance(box, list)
+            and len(box) == 4
+            and all(isinstance(v, (int, float)) for v in box)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: box must be [x1,y1,x2,y2]",
+                "InvalidParams",
+                {"field": "box", "got": box},
+            )
     if viewport_mode == "center_size":
-        if not (isinstance(center, list) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
-            return _err_std(_id, -32602, "Invalid params: center must be [cx,cy]", "InvalidParams", {"field": "center", "got": center})
-        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)):
-            return _err_std(_id, -32602, "Invalid params: size must be [w,h]", "InvalidParams", {"field": "size", "got": size})
+        if not (
+            isinstance(center, list)
+            and len(center) == 2
+            and all(isinstance(v, (int, float)) for v in center)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: center must be [cx,cy]",
+                "InvalidParams",
+                {"field": "center", "got": center},
+            )
+        if not (
+            isinstance(size, list)
+            and len(size) == 2
+            and all(isinstance(v, (int, float)) for v in size)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: size must be [w,h]",
+                "InvalidParams",
+                {"field": "size", "got": size},
+            )
     if viewport_mode == "relative":
         if not isinstance(steps, int):
-            return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: steps must be int",
+                "InvalidParams",
+                {"field": "steps", "got": steps},
+            )
 
     if not isinstance(oversampling, int) or oversampling < 0:
-        return _err_std(_id, -32602, "Invalid params: oversampling must be int >= 0", "InvalidParams", {"field": "oversampling", "got": oversampling})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: oversampling must be int >= 0",
+            "InvalidParams",
+            {"field": "oversampling", "got": oversampling},
+        )
     if not isinstance(resolution, (int, float)):
-        return _err_std(_id, -32602, "Invalid params: resolution must be number", "InvalidParams", {"field": "resolution", "got": resolution})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: resolution must be number",
+            "InvalidParams",
+            {"field": "resolution", "got": resolution},
+        )
     if not isinstance(linewidth, int) or linewidth < 0:
-        return _err_std(_id, -32602, "Invalid params: linewidth must be int >= 0", "InvalidParams", {"field": "linewidth", "got": linewidth})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: linewidth must be int >= 0",
+            "InvalidParams",
+            {"field": "linewidth", "got": linewidth},
+        )
     if not isinstance(monochrome, bool):
-        return _err_std(_id, -32602, "Invalid params: monochrome must be boolean", "InvalidParams", {"field": "monochrome", "got": monochrome})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: monochrome must be boolean",
+            "InvalidParams",
+            {"field": "monochrome", "got": monochrome},
+        )
     if not isinstance(overwrite, bool):
-        return _err_std(_id, -32602, "Invalid params: overwrite must be boolean", "InvalidParams", {"field": "overwrite", "got": overwrite})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: overwrite must be boolean",
+            "InvalidParams",
+            {"field": "overwrite", "got": overwrite},
+        )
 
     resolved, perr = _resolve_screenshot_path(_id, path)
     if perr:
@@ -883,7 +1110,12 @@ def _m_view_screenshot(_id, params):
         mw = None
 
     if mw is None:
-        return _err(_id, -32013, "MainWindow not available: cannot screenshot", "MainWindowUnavailable")
+        return _err(
+            _id,
+            -32013,
+            "MainWindow not available: cannot screenshot",
+            "MainWindowUnavailable",
+        )
 
     view = None
     try:
@@ -934,7 +1166,6 @@ def _m_view_screenshot(_id, params):
             "units": units,
         },
     )
-
 
 
 def _apply_viewport(view, layout, viewport_mode, units, box, center, size, steps):
@@ -1050,11 +1281,22 @@ def _m_view_ensure(_id, params):
 
     zoom_fit = params.get("zoom_fit", True)
     if not isinstance(zoom_fit, bool):
-        return _err_std(_id, -32602, "Invalid params: zoom_fit must be boolean", "InvalidParams", {"field": "zoom_fit"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: zoom_fit must be boolean",
+            "InvalidParams",
+            {"field": "zoom_fit"},
+        )
 
     view, e = _ensure_current_view(_STATE.layout)
     if e == "MainWindowUnavailable":
-        return _err(_id, -32013, "MainWindow not available: cannot ensure view", "MainWindowUnavailable")
+        return _err(
+            _id,
+            -32013,
+            "MainWindow not available: cannot ensure view",
+            "MainWindowUnavailable",
+        )
     if e == "NoCurrentView":
         return _err(_id, -32016, "Cannot create/obtain current view", "NoCurrentView")
     if e == "InternalError":
@@ -1079,8 +1321,9 @@ def _m_view_ensure(_id, params):
     except Exception:
         cur_idx = None
 
-    return _jsonrpc_result(_id, {"ok": True, "views": views_n, "current_view_index": cur_idx})
-
+    return _jsonrpc_result(
+        _id, {"ok": True, "views": views_n, "current_view_index": cur_idx}
+    )
 
 
 def _m_view_set_viewport(_id, params):
@@ -1113,27 +1356,82 @@ def _m_view_set_viewport(_id, params):
     steps = params.get("steps", 0)
 
     if viewport_mode not in ("fit", "box", "center_size", "relative"):
-        return _err_std(_id, -32602, "Invalid params: viewport_mode must be fit|box|center_size|relative", "InvalidParams", {"field": "viewport_mode", "got": viewport_mode})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: viewport_mode must be fit|box|center_size|relative",
+            "InvalidParams",
+            {"field": "viewport_mode", "got": viewport_mode},
+        )
     if units not in ("um", "dbu"):
-        return _err_std(_id, -32602, "Invalid params: units must be um|dbu", "InvalidParams", {"field": "units", "got": units})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: units must be um|dbu",
+            "InvalidParams",
+            {"field": "units", "got": units},
+        )
 
     if viewport_mode == "box":
-        if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
-            return _err_std(_id, -32602, "Invalid params: box must be [x1,y1,x2,y2]", "InvalidParams", {"field": "box", "got": box})
+        if not (
+            isinstance(box, list)
+            and len(box) == 4
+            and all(isinstance(v, (int, float)) for v in box)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: box must be [x1,y1,x2,y2]",
+                "InvalidParams",
+                {"field": "box", "got": box},
+            )
     if viewport_mode == "center_size":
-        if not (isinstance(center, list) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
-            return _err_std(_id, -32602, "Invalid params: center must be [cx,cy]", "InvalidParams", {"field": "center", "got": center})
-        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)):
-            return _err_std(_id, -32602, "Invalid params: size must be [w,h]", "InvalidParams", {"field": "size", "got": size})
+        if not (
+            isinstance(center, list)
+            and len(center) == 2
+            and all(isinstance(v, (int, float)) for v in center)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: center must be [cx,cy]",
+                "InvalidParams",
+                {"field": "center", "got": center},
+            )
+        if not (
+            isinstance(size, list)
+            and len(size) == 2
+            and all(isinstance(v, (int, float)) for v in size)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: size must be [w,h]",
+                "InvalidParams",
+                {"field": "size", "got": size},
+            )
     if viewport_mode == "relative":
         if not isinstance(steps, int):
-            return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: steps must be int",
+                "InvalidParams",
+                {"field": "steps", "got": steps},
+            )
 
     view, v_err = _get_current_view()
     if v_err == "MainWindowUnavailable":
-        return _err(_id, -32013, "MainWindow not available: cannot set viewport", "MainWindowUnavailable")
+        return _err(
+            _id,
+            -32013,
+            "MainWindow not available: cannot set viewport",
+            "MainWindowUnavailable",
+        )
     if v_err == "NoCurrentView":
-        return _err(_id, -32016, "No current view: cannot set viewport", "NoCurrentView")
+        return _err(
+            _id, -32016, "No current view: cannot set viewport", "NoCurrentView"
+        )
 
     _gui_refresh("pre-viewport")
     _apply_viewport(view, _STATE.layout, viewport_mode, units, box, center, size, steps)
@@ -1177,18 +1475,43 @@ def _m_view_set_hier_levels(_id, params):
     max_level = params.get("max_level", None)
 
     if mode not in ("max", "set"):
-        return _err_std(_id, -32602, "Invalid params: mode must be max|set", "InvalidParams", {"field": "mode", "got": mode})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: mode must be max|set",
+            "InvalidParams",
+            {"field": "mode", "got": mode},
+        )
     if mode == "set":
         if min_level is not None and (not isinstance(min_level, int) or min_level < 0):
-            return _err_std(_id, -32602, "Invalid params: min_level must be int >= 0", "InvalidParams", {"field": "min_level", "got": min_level})
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: min_level must be int >= 0",
+                "InvalidParams",
+                {"field": "min_level", "got": min_level},
+            )
         if max_level is not None and (not isinstance(max_level, int) or max_level < 0):
-            return _err_std(_id, -32602, "Invalid params: max_level must be int >= 0", "InvalidParams", {"field": "max_level", "got": max_level})
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: max_level must be int >= 0",
+                "InvalidParams",
+                {"field": "max_level", "got": max_level},
+            )
 
     view, v_err = _get_current_view()
     if v_err == "MainWindowUnavailable":
-        return _err(_id, -32013, "MainWindow not available: cannot set hier levels", "MainWindowUnavailable")
+        return _err(
+            _id,
+            -32013,
+            "MainWindow not available: cannot set hier levels",
+            "MainWindowUnavailable",
+        )
     if v_err == "NoCurrentView":
-        return _err(_id, -32016, "No current view: cannot set hier levels", "NoCurrentView")
+        return _err(
+            _id, -32016, "No current view: cannot set hier levels", "NoCurrentView"
+        )
 
     _gui_refresh("pre-hier-levels")
 
@@ -1201,7 +1524,9 @@ def _m_view_set_hier_levels(_id, params):
             if max_level is not None:
                 view.max_hier_levels = int(max_level)
     except Exception as e:
-        return _err(_id, -32099, f"Failed to set hierarchy levels: {e}", "InternalError")
+        return _err(
+            _id, -32099, f"Failed to set hierarchy levels: {e}", "InternalError"
+        )
 
     _gui_refresh("post-hier-levels")
 
@@ -1221,7 +1546,6 @@ def _m_view_set_hier_levels(_id, params):
             "max_hier_levels": cur_max,
         },
     )
-
 
 
 def _m_layout_render_png(_id, params):
@@ -1275,38 +1599,106 @@ def _m_layout_render_png(_id, params):
     overwrite = params.get("overwrite", True)
 
     if viewport_mode not in ("fit", "box", "center_size", "relative"):
-        return _err_std(_id, -32602, "Invalid params: viewport_mode must be fit|box|center_size|relative", "InvalidParams", {"field": "viewport_mode", "got": viewport_mode})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: viewport_mode must be fit|box|center_size|relative",
+            "InvalidParams",
+            {"field": "viewport_mode", "got": viewport_mode},
+        )
     if units not in ("um", "dbu"):
-        return _err_std(_id, -32602, "Invalid params: units must be um|dbu", "InvalidParams", {"field": "units", "got": units})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: units must be um|dbu",
+            "InvalidParams",
+            {"field": "units", "got": units},
+        )
 
     if not isinstance(width, int) or width < 1:
-        return _err_std(_id, -32602, "Invalid params: width must be int >= 1", "InvalidParams", {"field": "width", "got": width})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: width must be int >= 1",
+            "InvalidParams",
+            {"field": "width", "got": width},
+        )
     if not isinstance(height, int) or height < 1:
-        return _err_std(_id, -32602, "Invalid params: height must be int >= 1", "InvalidParams", {"field": "height", "got": height})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: height must be int >= 1",
+            "InvalidParams",
+            {"field": "height", "got": height},
+        )
 
     if viewport_mode == "box":
-        if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
-            return _err_std(_id, -32602, "Invalid params: box must be [x1,y1,x2,y2]", "InvalidParams", {"field": "box", "got": box})
+        if not (
+            isinstance(box, list)
+            and len(box) == 4
+            and all(isinstance(v, (int, float)) for v in box)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: box must be [x1,y1,x2,y2]",
+                "InvalidParams",
+                {"field": "box", "got": box},
+            )
     if viewport_mode == "center_size":
-        if not (isinstance(center, list) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
-            return _err_std(_id, -32602, "Invalid params: center must be [cx,cy]", "InvalidParams", {"field": "center", "got": center})
-        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)):
-            return _err_std(_id, -32602, "Invalid params: size must be [w,h]", "InvalidParams", {"field": "size", "got": size})
+        if not (
+            isinstance(center, list)
+            and len(center) == 2
+            and all(isinstance(v, (int, float)) for v in center)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: center must be [cx,cy]",
+                "InvalidParams",
+                {"field": "center", "got": center},
+            )
+        if not (
+            isinstance(size, list)
+            and len(size) == 2
+            and all(isinstance(v, (int, float)) for v in size)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: size must be [w,h]",
+                "InvalidParams",
+                {"field": "size", "got": size},
+            )
     if viewport_mode == "relative":
         if not isinstance(steps, int):
-            return _err_std(_id, -32602, "Invalid params: steps must be int", "InvalidParams", {"field": "steps", "got": steps})
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: steps must be int",
+                "InvalidParams",
+                {"field": "steps", "got": steps},
+            )
 
     resolved, perr = _resolve_screenshot_path(_id, path)
     if perr:
         return perr
     if os.path.exists(resolved["abs"]) and not overwrite:
-        return _err(_id, -32011, f"File exists and overwrite=false: {resolved['rel']}", "FileExists", {"path": resolved["rel"]})
+        return _err(
+            _id,
+            -32011,
+            f"File exists and overwrite=false: {resolved['rel']}",
+            "FileExists",
+            {"path": resolved["rel"]},
+        )
 
     # Create a standalone view and attach the active layout.
     try:
         view = pya.LayoutView.new(False)
     except Exception as e:
-        return _err(_id, -32017, f"Failed to create LayoutView: {e}", "LayoutViewUnavailable")
+        return _err(
+            _id, -32017, f"Failed to create LayoutView: {e}", "LayoutViewUnavailable"
+        )
 
     try:
         # init_layers=True to populate layer properties automatically
@@ -1346,7 +1738,6 @@ def _m_layout_render_png(_id, params):
     )
 
 
-
 def _m_layout_open(_id, params):
     """需求4-2: open a layout file in KLayout and switch active server layout.
 
@@ -1375,7 +1766,13 @@ def _m_layout_open(_id, params):
         return perr
 
     if not os.path.exists(resolved["abs"]):
-        return _err(_id, -32012, f"File not found: {resolved['rel']}", "FileNotFound", {"path": resolved["rel"]})
+        return _err(
+            _id,
+            -32012,
+            f"File not found: {resolved['rel']}",
+            "FileNotFound",
+            {"path": resolved["rel"]},
+        )
 
     app = pya.Application.instance()
     mw = None
@@ -1385,7 +1782,12 @@ def _m_layout_open(_id, params):
         mw = None
 
     if mw is None:
-        return _err(_id, -32013, "MainWindow not available: cannot open layout", "MainWindowUnavailable")
+        return _err(
+            _id,
+            -32013,
+            "MainWindow not available: cannot open layout",
+            "MainWindowUnavailable",
+        )
 
     try:
         cv = mw.load_layout(resolved["abs"], int(mode))
@@ -1394,7 +1796,9 @@ def _m_layout_open(_id, params):
         return _err(_id, -32014, f"Failed to open layout: {e}", "OpenFailed")
 
     if layout is None:
-        return _err(_id, -32014, "Failed to open layout: no layout returned", "OpenFailed")
+        return _err(
+            _id, -32014, "Failed to open layout: no layout returned", "OpenFailed"
+        )
 
     # Switch server state to this layout.
     _STATE.layout = layout
@@ -1501,7 +1905,14 @@ def _m_layout_get_layers(_id, params):
         if name is not None and not isinstance(name, str):
             name = str(name)
 
-        layers.append({"layer": layer_num, "datatype": datatype, "name": name, "layer_index": int(li)})
+        layers.append(
+            {
+                "layer": layer_num,
+                "datatype": datatype,
+                "name": name,
+                "layer_index": int(li),
+            }
+        )
 
     return _jsonrpc_result(_id, {"layers": layers})
 
@@ -1744,7 +2155,10 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
                 [float(b.right) * dbu, float(b.top) * dbu],
                 [float(b.left) * dbu, float(b.top) * dbu],
             ]
-            return "box", {"points_um": pts, "bbox_um": [pts[0][0], pts[0][1], pts[2][0], pts[2][1]]}
+            return "box", {
+                "points_um": pts,
+                "bbox_um": [pts[0][0], pts[0][1], pts[2][0], pts[2][1]],
+            }
     except Exception:
         pass
 
@@ -1775,7 +2189,11 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
             width_um = float(_maybe_call(getattr(path, "width", None)) or 0.0) * dbu
-            return "path", {"points_um": pts, "width_um": width_um, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+            return "path", {
+                "points_um": pts,
+                "width_um": width_um,
+                "bbox_um": [min(xs), min(ys), max(xs), max(ys)],
+            }
     except Exception:
         pass
 
@@ -1804,7 +2222,10 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
         if pts:
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
-            return "polygon", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+            return "polygon", {
+                "points_um": pts,
+                "bbox_um": [min(xs), min(ys), max(xs), max(ys)],
+            }
 
         # Fallback: bbox only (still call it polygon-like)
         bb = _maybe_call(getattr(shape, "bbox", None))
@@ -1818,7 +2239,10 @@ def _shape_points_um_and_bbox(shape, trans, dbu):
             ]
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
-            return "polygon", {"points_um": pts, "bbox_um": [min(xs), min(ys), max(xs), max(ys)]}
+            return "polygon", {
+                "points_um": pts,
+                "bbox_um": [min(xs), min(ys), max(xs), max(ys)],
+            }
     except Exception:
         pass
 
@@ -2087,42 +2511,88 @@ def _m_hier_shapes_rec_boxes(_id, params):
     merge_boxes = params.get("merge_boxes", True)
 
     if not isinstance(start_cell, str) or not start_cell:
-        return _err_std(_id, -32602, "Invalid params: start_cell must be non-empty string", "InvalidParams", {"field": "start_cell"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: start_cell must be non-empty string",
+            "InvalidParams",
+            {"field": "start_cell"},
+        )
 
     if unit != "dbu":
-        return _err_std(_id, -32602, "Invalid params: unit must be 'dbu'", "InvalidParams", {"field": "unit", "got": unit})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: unit must be 'dbu'",
+            "InvalidParams",
+            {"field": "unit", "got": unit},
+        )
 
     allowed_types = ("polygon", "box", "path")
     if shape_types is None:
         shape_types = list(allowed_types)
-    if not (isinstance(shape_types, list) and all(isinstance(x, str) and x in allowed_types for x in shape_types)):
+    if not (
+        isinstance(shape_types, list)
+        and all(isinstance(x, str) and x in allowed_types for x in shape_types)
+    ):
         return _err_std(
             _id,
             -32602,
             "Invalid params: shape_types must be a list of polygon|box|path",
             "InvalidParams",
-            {"field": "shape_types", "allowed": list(allowed_types), "got": shape_types},
+            {
+                "field": "shape_types",
+                "allowed": list(allowed_types),
+                "got": shape_types,
+            },
         )
 
     if layer_filter is not None:
-        if not (isinstance(layer_filter, list) and all(isinstance(x, int) and x >= 0 for x in layer_filter)):
-            return _err_std(_id, -32602, "Invalid params: layer_filter must be int[]", "InvalidParams", {"field": "layer_filter"})
+        if not (
+            isinstance(layer_filter, list)
+            and all(isinstance(x, int) and x >= 0 for x in layer_filter)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: layer_filter must be int[]",
+                "InvalidParams",
+                {"field": "layer_filter"},
+            )
 
     if not isinstance(max_boxes, int) or max_boxes < 1:
-        return _err_std(_id, -32602, "Invalid params: max_boxes must be int >= 1", "InvalidParams", {"field": "max_boxes"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: max_boxes must be int >= 1",
+            "InvalidParams",
+            {"field": "max_boxes"},
+        )
 
     if not isinstance(merge_boxes, bool):
-        return _err_std(_id, -32602, "Invalid params: merge_boxes must be boolean", "InvalidParams", {"field": "merge_boxes"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: merge_boxes must be boolean",
+            "InvalidParams",
+            {"field": "merge_boxes"},
+        )
 
     if not _STATE.layout.has_cell(start_cell):
-        return _err(_id, -32002, f"Cell not found: {start_cell}", "CellNotFound", {"name": start_cell})
+        return _err(
+            _id,
+            -32002,
+            f"Cell not found: {start_cell}",
+            "CellNotFound",
+            {"name": start_cell},
+        )
 
     cell = _STATE.layout.cell(start_cell)
 
     # default: all layers
     if layer_filter is None:
         try:
-            layer_filter = list(range(int(_STATE.layout.layers())))
+            layer_filter = sorted(_STATE.layout.layer_indexes())
         except Exception:
             layer_filter = []
 
@@ -2130,7 +2600,10 @@ def _m_hier_shapes_rec_boxes(_id, params):
     truncated = False
 
     debug = bool(params.get("debug", False))
-    dbg = {"seen": 0, "kinds": {"box": 0, "polygon": 0, "path": 0, "none": 0, "non_manhattan": 0}}
+    dbg = {
+        "seen": 0,
+        "kinds": {"box": 0, "polygon": 0, "path": 0, "none": 0, "non_manhattan": 0},
+    }
 
     try:
         for lyr in layer_filter:
@@ -2154,7 +2627,12 @@ def _m_hier_shapes_rec_boxes(_id, params):
                     except Exception:
                         pass
                 except Exception as e:
-                    return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
+                    return _err(
+                        _id,
+                        -32099,
+                        f"Internal error: begin_shapes_rec({lyr}) failed: {e}",
+                        "InternalError",
+                    )
 
             while not it.at_end():
                 if len(boxes_out) >= max_boxes:
@@ -2222,7 +2700,12 @@ def _m_hier_shapes_rec_boxes(_id, params):
     except Exception as e:
         return _err(_id, -32099, f"Internal error: {e}", "InternalError")
 
-    out = {"boxes": boxes_out, "unit": "dbu", "count": int(len(boxes_out)), "truncated": bool(truncated)}
+    out = {
+        "boxes": boxes_out,
+        "unit": "dbu",
+        "count": int(len(boxes_out)),
+        "truncated": bool(truncated),
+    }
     if debug:
         out["debug"] = dbg
     return _jsonrpc_result(_id, out)
@@ -2274,32 +2757,72 @@ def _m_hier_shapes_rec(_id, params):
     max_results = params.get("max_results", 200000)
 
     if not isinstance(start_cell, str) or not start_cell:
-        return _err_std(_id, -32602, "Invalid params: start_cell must be non-empty string", "InvalidParams", {"field": "start_cell"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: start_cell must be non-empty string",
+            "InvalidParams",
+            {"field": "start_cell"},
+        )
 
     if unit != "um":
-        return _err_std(_id, -32602, "Invalid params: unit must be 'um'", "InvalidParams", {"field": "unit", "got": unit})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: unit must be 'um'",
+            "InvalidParams",
+            {"field": "unit", "got": unit},
+        )
 
     allowed_types = ("polygon", "box", "path")
     if shape_types is None:
         shape_types = list(allowed_types)
-    if not (isinstance(shape_types, list) and all(isinstance(x, str) and x in allowed_types for x in shape_types)):
+    if not (
+        isinstance(shape_types, list)
+        and all(isinstance(x, str) and x in allowed_types for x in shape_types)
+    ):
         return _err_std(
             _id,
             -32602,
             "Invalid params: shape_types must be a list of polygon|box|path",
             "InvalidParams",
-            {"field": "shape_types", "allowed": list(allowed_types), "got": shape_types},
+            {
+                "field": "shape_types",
+                "allowed": list(allowed_types),
+                "got": shape_types,
+            },
         )
 
     if layer_filter is not None:
-        if not (isinstance(layer_filter, list) and all(isinstance(x, int) and x >= 0 for x in layer_filter)):
-            return _err_std(_id, -32602, "Invalid params: layer_filter must be int[]", "InvalidParams", {"field": "layer_filter"})
+        if not (
+            isinstance(layer_filter, list)
+            and all(isinstance(x, int) and x >= 0 for x in layer_filter)
+        ):
+            return _err_std(
+                _id,
+                -32602,
+                "Invalid params: layer_filter must be int[]",
+                "InvalidParams",
+                {"field": "layer_filter"},
+            )
 
     if not isinstance(max_results, int) or max_results < 1:
-        return _err_std(_id, -32602, "Invalid params: max_results must be int >= 1", "InvalidParams", {"field": "max_results"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: max_results must be int >= 1",
+            "InvalidParams",
+            {"field": "max_results"},
+        )
 
     if not _STATE.layout.has_cell(start_cell):
-        return _err(_id, -32002, f"Cell not found: {start_cell}", "CellNotFound", {"name": start_cell})
+        return _err(
+            _id,
+            -32002,
+            f"Cell not found: {start_cell}",
+            "CellNotFound",
+            {"name": start_cell},
+        )
 
     cell = _STATE.layout.cell(start_cell)
     dbu = float(_STATE.layout.dbu)
@@ -2307,7 +2830,7 @@ def _m_hier_shapes_rec(_id, params):
     # default: all layers
     if layer_filter is None:
         try:
-            layer_filter = list(range(int(_STATE.layout.layers())))
+            layer_filter = sorted(_STATE.layout.layer_indexes())
         except Exception:
             layer_filter = []
     layer_filter_set = set(int(x) for x in layer_filter)
@@ -2349,7 +2872,12 @@ def _m_hier_shapes_rec(_id, params):
                     except Exception:
                         pass
                 except Exception as e:
-                    return _err(_id, -32099, f"Internal error: begin_shapes_rec({lyr}) failed: {e}", "InternalError")
+                    return _err(
+                        _id,
+                        -32099,
+                        f"Internal error: begin_shapes_rec({lyr}) failed: {e}",
+                        "InternalError",
+                    )
 
             while not it.at_end():
                 if len(shapes_out) >= max_results:
@@ -2374,17 +2902,26 @@ def _m_hier_shapes_rec(_id, params):
                     except Exception:
                         pass
                     try:
-                        if callable(getattr(shape, "is_polygon", None)) and shape.is_polygon():
+                        if (
+                            callable(getattr(shape, "is_polygon", None))
+                            and shape.is_polygon()
+                        ):
                             dbg["is_polygon"] += 1
                     except Exception:
                         pass
                     try:
-                        if callable(getattr(shape, "is_simple_polygon", None)) and shape.is_simple_polygon():
+                        if (
+                            callable(getattr(shape, "is_simple_polygon", None))
+                            and shape.is_simple_polygon()
+                        ):
                             dbg["is_simple_polygon"] += 1
                     except Exception:
                         pass
                     try:
-                        if callable(getattr(shape, "is_path", None)) and shape.is_path():
+                        if (
+                            callable(getattr(shape, "is_path", None))
+                            and shape.is_path()
+                        ):
                             dbg["is_path"] += 1
                     except Exception:
                         pass
@@ -2425,9 +2962,19 @@ def _m_hier_shapes_rec(_id, params):
                 it.next()
 
     except Exception as e:
-        return _err(_id, -32099, f"Internal error: shapes_rec iteration failed: {e}", "InternalError")
+        return _err(
+            _id,
+            -32099,
+            f"Internal error: shapes_rec iteration failed: {e}",
+            "InternalError",
+        )
 
-    out = {"shapes": shapes_out, "unit": "um", "count": int(len(shapes_out)), "truncated": bool(truncated)}
+    out = {
+        "shapes": shapes_out,
+        "unit": "um",
+        "count": int(len(shapes_out)),
+        "truncated": bool(truncated),
+    }
     if debug:
         out["debug"] = dbg
     return _jsonrpc_result(_id, out)
@@ -2464,13 +3011,27 @@ def _m_hier_query_up_paths(_id, params):
     max_paths = params.get("max_paths", 10000)
 
     if not isinstance(target, str) or not target:
-        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: cell must be a non-empty string",
+            "InvalidParams",
+            {"field": "cell"},
+        )
 
     if not isinstance(max_paths, int) or max_paths < 1:
-        return _err_std(_id, -32602, "Invalid params: max_paths must be int >= 1", "InvalidParams", {"field": "max_paths"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: max_paths must be int >= 1",
+            "InvalidParams",
+            {"field": "max_paths"},
+        )
 
     if not _STATE.layout.has_cell(target):
-        return _err(_id, -32000, f"Cell not found: {target}", "CellNotFound", {"name": target})
+        return _err(
+            _id, -32000, f"Cell not found: {target}", "CellNotFound", {"name": target}
+        )
 
     # Enforce single top cell
     try:
@@ -2599,7 +3160,6 @@ def _m_hier_query_up_paths(_id, params):
     )
 
 
-
 def _m_hier_query_down_stats(_id, params):
     """需求(新): query instance counts grouped by child_cell.
 
@@ -2642,16 +3202,36 @@ def _m_hier_query_down_stats(_id, params):
     max_results = params.get("max_results", 20_000_000)
 
     if not isinstance(root, str) or not root:
-        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: cell must be a non-empty string",
+            "InvalidParams",
+            {"field": "cell"},
+        )
 
     if not isinstance(depth, int) or depth < 0:
-        return _err_std(_id, -32602, "Invalid params: depth must be int >= 0", "InvalidParams", {"field": "depth"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: depth must be int >= 0",
+            "InvalidParams",
+            {"field": "depth"},
+        )
 
     if not isinstance(max_results, int) or max_results < 1:
-        return _err_std(_id, -32602, "Invalid params: max_results must be int >= 1", "InvalidParams", {"field": "max_results"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: max_results must be int >= 1",
+            "InvalidParams",
+            {"field": "max_results"},
+        )
 
     if not _STATE.layout.has_cell(root):
-        return _err(_id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root})
+        return _err(
+            _id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root}
+        )
 
     root_cell_obj = _STATE.layout.cell(root)
 
@@ -2683,7 +3263,12 @@ def _m_hier_query_down_stats(_id, params):
         try:
             itrec = root_cell_obj.begin_instances_rec()
         except Exception as e:
-            return _err(_id, -32099, f"Internal error: begin_instances_rec failed: {e}", "InternalError")
+            return _err(
+                _id,
+                -32099,
+                f"Internal error: begin_instances_rec failed: {e}",
+                "InternalError",
+            )
 
     # Configure depth: iterator depth applies to the PARENT cell of delivered instances.
     try:
@@ -2727,7 +3312,12 @@ def _m_hier_query_down_stats(_id, params):
             itrec.next()
 
     except Exception as e:
-        return _err(_id, -32099, f"Internal error: hier.query_down_stats iteration failed: {e}", "InternalError")
+        return _err(
+            _id,
+            -32099,
+            f"Internal error: hier.query_down_stats iteration failed: {e}",
+            "InternalError",
+        )
 
     return _jsonrpc_result(
         _id,
@@ -2741,7 +3331,6 @@ def _m_hier_query_down_stats(_id, params):
             "max_results": int(max_results),
         },
     )
-
 
 
 def _m_hier_query_down(_id, params):
@@ -2796,10 +3385,22 @@ def _m_hier_query_down(_id, params):
         max_results = params.get("limit")
 
     if not isinstance(root, str) or not root:
-        return _err_std(_id, -32602, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: cell must be a non-empty string",
+            "InvalidParams",
+            {"field": "cell"},
+        )
 
     if not isinstance(depth, int) or depth < 0:
-        return _err_std(_id, -32602, "Invalid params: depth must be int >= 0", "InvalidParams", {"field": "depth"})
+        return _err_std(
+            _id,
+            -32602,
+            "Invalid params: depth must be int >= 0",
+            "InvalidParams",
+            {"field": "depth"},
+        )
 
     if mode not in ("structural", "expanded"):
         return _err_std(
@@ -2843,7 +3444,9 @@ def _m_hier_query_down(_id, params):
         )
 
     if not _STATE.layout.has_cell(root):
-        return _err(_id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root})
+        return _err(
+            _id, -32000, f"Cell not found: {root}", "CellNotFound", {"name": root}
+        )
 
     results = []
 
@@ -3077,7 +3680,12 @@ def _m_hier_query_down(_id, params):
             try:
                 itrec = root_cell_obj.begin_instances_rec()
             except Exception as e:
-                return _err(_id, -32099, f"Internal error: begin_instances_rec failed: {e}", "InternalError")
+                return _err(
+                    _id,
+                    -32099,
+                    f"Internal error: begin_instances_rec failed: {e}",
+                    "InternalError",
+                )
 
         # Configure depth on iterator (depth counts instance-edges from root; parent depth = depth-1)
         try:
@@ -3105,7 +3713,9 @@ def _m_hier_query_down(_id, params):
                     continue
 
                 # Parent cell
-                path_cells, parent_cell_name, parent_depth = _iter_inst_path_cells(itrec, root)
+                path_cells, parent_cell_name, parent_depth = _iter_inst_path_cells(
+                    itrec, root
+                )
 
                 # Child cell (target cell)
                 child_cell = _maybe_call(getattr(itrec, "inst_cell", None))
@@ -3129,13 +3739,24 @@ def _m_hier_query_down(_id, params):
                 # Expanded mode: each iterator step corresponds to one physical instance element.
                 # We always return kind='single' records (matching existing expanded mode output).
                 t = _maybe_call(getattr(itrec, "inst_trans", None))
-                tdict = _trans_to_dict(t) if t is not None else (inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False})
+                tdict = (
+                    _trans_to_dict(t)
+                    if t is not None
+                    else (
+                        inst_trans(inst, cia)
+                        if cia is not None
+                        else {"x": 0, "y": 0, "rot": 0, "mirror": False}
+                    )
+                )
 
                 expanded_index = None
                 if el is not None and arr is not None:
                     try:
                         # InstElement provides ia/ib for array members.
-                        expanded_index = {"ix": int(_maybe_call(getattr(el, "ia", None)) or 0), "iy": int(_maybe_call(getattr(el, "ib", None)) or 0)}
+                        expanded_index = {
+                            "ix": int(_maybe_call(getattr(el, "ia", None)) or 0),
+                            "iy": int(_maybe_call(getattr(el, "ib", None)) or 0),
+                        }
                     except Exception:
                         expanded_index = None
 
@@ -3167,7 +3788,12 @@ def _m_hier_query_down(_id, params):
                 itrec.next()
 
         except Exception as e:
-            return _err(_id, -32099, f"Internal error: hier.query_down iteration failed: {e}", "InternalError")
+            return _err(
+                _id,
+                -32099,
+                f"Internal error: hier.query_down iteration failed: {e}",
+                "InternalError",
+            )
 
         return None
 
@@ -3194,7 +3820,11 @@ def _m_hier_query_down(_id, params):
             kind, cia, arr = inst_kind_and_array(inst)
 
             if mode == "structural" or kind == "single":
-                tdict = inst_trans(inst, cia) if cia is not None else {"x": 0, "y": 0, "rot": 0, "mirror": False}
+                tdict = (
+                    inst_trans(inst, cia)
+                    if cia is not None
+                    else {"x": 0, "y": 0, "rot": 0, "mirror": False}
+                )
 
                 rec = {
                     "kind": kind,
@@ -3342,7 +3972,13 @@ def _m_hier_query_down(_id, params):
 def _req3_parent_child_cells(_id, params):
     cell_name = params.get("cell", "TOP")
     if not isinstance(cell_name, str) or not cell_name:
-        return None, _err(_id, -32000, "Invalid params: cell must be a non-empty string", "InvalidParams", {"field": "cell"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: cell must be a non-empty string",
+            "InvalidParams",
+            {"field": "cell"},
+        )
 
     child_name = params.get("child_cell", None)
     if not isinstance(child_name, str) or not child_name:
@@ -3355,7 +3991,13 @@ def _req3_parent_child_cells(_id, params):
         )
 
     if not _STATE.layout.has_cell(cell_name):
-        return None, _err(_id, -32000, f"Cell not found: {cell_name}", "CellNotFound", {"name": cell_name})
+        return None, _err(
+            _id,
+            -32000,
+            f"Cell not found: {cell_name}",
+            "CellNotFound",
+            {"name": cell_name},
+        )
 
     if not _STATE.layout.has_cell(child_name):
         return None, _err(
@@ -3382,7 +4024,13 @@ def _req3_parse_trans(_id, params):
     if trans is None:
         trans = {}
     if not isinstance(trans, dict):
-        return None, _err(_id, -32000, "Invalid params: trans must be an object", "InvalidParams", {"field": "trans"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: trans must be an object",
+            "InvalidParams",
+            {"field": "trans"},
+        )
 
     x = trans.get("x", 0)
     y = trans.get("y", 0)
@@ -3434,7 +4082,13 @@ def _req3_parse_trans(_id, params):
 def _req3_parse_array(_id, params):
     arr = params.get("array", None)
     if not isinstance(arr, dict):
-        return None, _err(_id, -32000, "Invalid params: array must be an object", "InvalidParams", {"field": "array"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: array must be an object",
+            "InvalidParams",
+            {"field": "array"},
+        )
 
     nx = arr.get("nx", None)
     ny = arr.get("ny", None)
@@ -3442,11 +4096,29 @@ def _req3_parse_array(_id, params):
     dy = arr.get("dy", None)
 
     if not isinstance(nx, int) or nx < 1:
-        return None, _err(_id, -32000, "Invalid params: nx must be int >= 1", "InvalidParams", {"field": "array.nx", "got": nx})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: nx must be int >= 1",
+            "InvalidParams",
+            {"field": "array.nx", "got": nx},
+        )
     if not isinstance(ny, int) or ny < 1:
-        return None, _err(_id, -32000, "Invalid params: ny must be int >= 1", "InvalidParams", {"field": "array.ny", "got": ny})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: ny must be int >= 1",
+            "InvalidParams",
+            {"field": "array.ny", "got": ny},
+        )
     if not isinstance(dx, int) or not isinstance(dy, int):
-        return None, _err(_id, -32000, "Invalid params: dx and dy must be int (DBU)", "InvalidParams", {"field": "array"})
+        return None, _err(
+            _id,
+            -32000,
+            "Invalid params: dx and dy must be int (DBU)",
+            "InvalidParams",
+            {"field": "array"},
+        )
 
     return {"nx": nx, "ny": ny, "dx": dx, "dy": dy}, None
 
@@ -3481,7 +4153,12 @@ def _m_instance_create(_id, params):
             "inserted": True,
             "cell": cells["cell"],
             "child_cell": cells["child_cell"],
-            "trans": {"x": tr["x"], "y": tr["y"], "rot": tr["rot"], "mirror": tr["mirror"]},
+            "trans": {
+                "x": tr["x"],
+                "y": tr["y"],
+                "rot": tr["rot"],
+                "mirror": tr["mirror"],
+            },
         },
     )
 
@@ -3511,7 +4188,9 @@ def _m_instance_array_create(_id, params):
     a = pya.Vector(arr["dx"], 0)
     b = pya.Vector(0, arr["dy"])
 
-    cia = pya.CellInstArray(cells["child_cell_obj"], tr["t"], a, b, arr["nx"], arr["ny"])
+    cia = pya.CellInstArray(
+        cells["child_cell_obj"], tr["t"], a, b, arr["nx"], arr["ny"]
+    )
     cells["parent_cell"].insert(cia)
 
     _gui_refresh("instance_array.create")
@@ -3522,8 +4201,18 @@ def _m_instance_array_create(_id, params):
             "inserted": True,
             "cell": cells["cell"],
             "child_cell": cells["child_cell"],
-            "trans": {"x": tr["x"], "y": tr["y"], "rot": tr["rot"], "mirror": tr["mirror"]},
-            "array": {"nx": arr["nx"], "ny": arr["ny"], "dx": arr["dx"], "dy": arr["dy"]},
+            "trans": {
+                "x": tr["x"],
+                "y": tr["y"],
+                "rot": tr["rot"],
+                "mirror": tr["mirror"],
+            },
+            "array": {
+                "nx": arr["nx"],
+                "ny": arr["ny"],
+                "dx": arr["dx"],
+                "dy": arr["dy"],
+            },
         },
     )
 
@@ -3553,13 +4242,11 @@ _METHODS.update(
         "instance.create": _m_instance_create,
         "instance_array.create": _m_instance_array_create,
         "layout.open": _m_layout_open,
-
         "layout.get_topcell": _m_layout_get_topcell,
         "layout.get_layers": _m_layout_get_layers,
         "layout.get_dbu": _m_layout_get_dbu,
         "layout.get_cells": _m_layout_get_cells,
         "layout.get_hierarchy_depth": _m_layout_get_hierarchy_depth,
-
         "hier.query_down": _m_hier_query_down,
         "hier.query_down_stats": _m_hier_query_down_stats,
         "hier.query_up_paths": _m_hier_query_up_paths,
@@ -3571,24 +4258,42 @@ _METHODS.update(
 
 def _handle_request(req):
     if not isinstance(req, dict):
-        return _err_std(None, -32600, "Invalid Request: request must be an object", "InvalidRequest")
+        return _err_std(
+            None, -32600, "Invalid Request: request must be an object", "InvalidRequest"
+        )
 
     if req.get("jsonrpc") != "2.0":
-        return _err_std(req.get("id", None), -32600, "Invalid Request: jsonrpc must be '2.0'", "InvalidRequest")
+        return _err_std(
+            req.get("id", None),
+            -32600,
+            "Invalid Request: jsonrpc must be '2.0'",
+            "InvalidRequest",
+        )
 
     _id = req.get("id", None)
     method = req.get("method", None)
     params = req.get("params", {})
 
     if not isinstance(method, str) or not method:
-        return _err_std(_id, -32600, "Invalid Request: method must be a non-empty string", "InvalidRequest")
+        return _err_std(
+            _id,
+            -32600,
+            "Invalid Request: method must be a non-empty string",
+            "InvalidRequest",
+        )
 
     if params is None:
         params = {}
 
     fn = _METHODS.get(method)
     if fn is None:
-        return _err_std(_id, -32601, f"Method not found: {method}", "MethodNotFound", {"method": method})
+        return _err_std(
+            _id,
+            -32601,
+            f"Method not found: {method}",
+            "MethodNotFound",
+            {"method": method},
+        )
 
     try:
         return fn(_id, params)

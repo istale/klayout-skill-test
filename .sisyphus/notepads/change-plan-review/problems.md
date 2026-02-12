@@ -1,0 +1,1 @@
+- Potential security notes: URL: ensure _SERVER_CWD_REAL restrictions prevent escaping; screenshot path uses commonpath with cwd; consistency check: _resolve_screenshot_path uses os.getcwd() rather than _SERVER_CWD_REAL

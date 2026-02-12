@@ -31,6 +31,16 @@ import json
 import time
 
 
+def wait_for_file(path, timeout_s=2.0, poll_interval=0.05):
+    """Wait for file to exist and have size > 0."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(f"File did not appear in time: {path}")
+
+
 def send_obj(s, obj):
     raw = (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
     s.sendall(raw)
@@ -79,7 +89,9 @@ def main():
     s = socket.create_connection(("127.0.0.1", args.port), timeout=5)
 
     _id = 1
-    r = rpc(s, _id, "layout.new", {"top_cell": "TOP", "dbu": 0.001, "clear_previous": True})
+    r = rpc(
+        s, _id, "layout.new", {"top_cell": "TOP", "dbu": 0.001, "clear_previous": True}
+    )
     assert_result(r)
     _id += 1
 
@@ -109,14 +121,26 @@ def main():
     _id += 1
 
     # Place child into TOP.
-    r = rpc(s, _id, "instance.create", {"cell": "TOP", "child_cell": "CHILD", "trans": {"x": 0, "y": 0, "rot": 0, "mirror": False}})
+    r = rpc(
+        s,
+        _id,
+        "instance.create",
+        {
+            "cell": "TOP",
+            "child_cell": "CHILD",
+            "trans": {"x": 0, "y": 0, "rot": 0, "mirror": False},
+        },
+    )
     assert_result(r)
     _id += 1
 
     # Ensure GUI view exists and shows layout.
     r = rpc(s, _id, "view.ensure", {"zoom_fit": True})
     if "error" in r:
-        if r["error"].get("data", {}).get("type") in ("MainWindowUnavailable", "NoCurrentView"):
+        if r["error"].get("data", {}).get("type") in (
+            "MainWindowUnavailable",
+            "NoCurrentView",
+        ):
             print("SKIP (no GUI view):", r["error"].get("message"))
             return 0
         raise AssertionError(f"view.ensure failed: {r!r}")
@@ -131,7 +155,9 @@ def main():
             pass
 
     # A) set max hier levels = 0
-    r = rpc(s, _id, "view.set_hier_levels", {"mode": "set", "min_level": 0, "max_level": 0})
+    r = rpc(
+        s, _id, "view.set_hier_levels", {"mode": "set", "min_level": 0, "max_level": 0}
+    )
     assert_result(r)
     _id += 1
 
@@ -175,7 +201,8 @@ def main():
     )
     assert_result(r)
 
-    time.sleep(0.2)
+    for p in (out_a, out_b):
+        wait_for_file(p, timeout_s=2.0)
 
     for p in (out_a, out_b):
         if not os.path.exists(p):
@@ -191,7 +218,9 @@ def main():
         print("B:", out_b, os.path.getsize(out_b), hb)
 
     if ha == hb:
-        raise AssertionError("Expected different images for max_level=0 vs max; but hashes match")
+        raise AssertionError(
+            "Expected different images for max_level=0 vs max; but hashes match"
+        )
 
     print("OK")
     return 0

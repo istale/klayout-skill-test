@@ -10,6 +10,16 @@ import json
 import time
 
 
+def wait_for_file(path, timeout_s=2.0, poll_interval=0.05):
+    """Wait for file to exist and have size > 0."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(f"File did not appear in time: {path}")
+
+
 def send_obj(s, obj):
     raw = (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
     s.sendall(raw)
@@ -47,7 +57,9 @@ def main():
     s = socket.create_connection(("127.0.0.1", args.port), timeout=5)
 
     _id = 1
-    r = rpc(s, _id, "layout.new", {"top_cell": "TOP", "dbu": 0.001, "clear_previous": True})
+    r = rpc(
+        s, _id, "layout.new", {"top_cell": "TOP", "dbu": 0.001, "clear_previous": True}
+    )
     assert_result(r)
     _id += 1
 
@@ -60,7 +72,13 @@ def main():
         s,
         _id,
         "shape.create",
-        {"cell": "TOP", "type": "box", "coords": [0, 0, 10_000, 6_000], "units": "dbu", "layer_index": li},
+        {
+            "cell": "TOP",
+            "type": "box",
+            "coords": [0, 0, 10_000, 6_000],
+            "units": "dbu",
+            "layer_index": li,
+        },
     )
     assert_result(r)
     _id += 1
@@ -91,7 +109,7 @@ def main():
     if args.verbose:
         print("render_png result:", r)
 
-    time.sleep(0.2)
+    wait_for_file(out_rel, timeout_s=2.0)
 
     if not os.path.exists(out_rel):
         raise AssertionError(f"Expected output file: {out_rel}")
