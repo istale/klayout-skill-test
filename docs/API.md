@@ -139,6 +139,9 @@
 ### Errors
 - `InvalidParams`
 
+### Notes
+- 若目前已經存在 active layout 且 `clear_previous=false`，則 **不會重建 layout**，而是直接回傳既有的 `{layout_id, dbu, top_cell}`。
+
 ---
 
 ## 6. layout.open
@@ -391,6 +394,10 @@
 - `MainWindowUnavailable` (-32013)
 - `NoCurrentView` (-32016)
 
+### Notes
+- `view.ensure` 的可用性取決於 KLayout 的啟動模式與 build 能力：即使使用 `-e -rm`（看似 headless），在某些環境下仍可能成功建立 view。
+- 若後續呼叫 `view.screenshot` / `view.set_viewport` 遇到 `NoCurrentView`，應先呼叫 `view.ensure`。
+
 詳細 GUI 物件模型見：`docs/GUI_MODEL.md`
 
 ---
@@ -446,6 +453,9 @@ Rendering options（傳給 `save_image_with_options`）：
 - `PathNotAllowed`
 - `FileExists`
 - `InvalidParams`
+
+### Notes
+- 即使在 `-e -rm` 模式下，是否能成功 screenshot 取決於 KLayout build/環境；若回 `NoCurrentView`，先呼叫 `view.ensure`。
 
 ---
 
@@ -576,6 +586,7 @@ Rendering options（傳給 `save_image_with_options`）：
 - `mode=structural`：陣列不展開。
 - `mode=expanded`：陣列展開，回傳 `expanded_index={ix,iy}`。
 - `engine`：iterator/dfs 的相容性策略見 `docs/COMPAT.md`。
+- Backward-compat：`limit` 可作為 `max_results` 的 alias（等價）。
 
 ---
 
@@ -598,7 +609,8 @@ Rendering options（傳給 `save_image_with_options`）：
     "INV":12000,
     "NAND":345
   },
-  "truncated":false
+  "truncated":false,
+  "max_results":20000000
 }
 ```
 
