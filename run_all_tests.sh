@@ -49,20 +49,33 @@ start_server() {
   (cd "$ROOT_DIR" && KLAYOUT_SERVER_PORT="$PORT" "$KLAYOUT_BIN" -e -rm klayout_gui_tcp_server.py) &
   SERVER_PID=$!
 
-  # Wait until port is accepting connections.
+  # Wait until JSON-RPC is responding (ping).
   python3 - <<'PY'
-import socket, os, time, sys
+import socket, os, time, sys, json
 port = int(os.environ.get('KLAYOUT_SERVER_PORT','5055'))
 timeout_s = float(os.environ.get('RUN_ALL_TESTS_SERVER_READY_S','10'))
 deadline = time.time() + timeout_s
+req = {"jsonrpc":"2.0","id":1,"method":"ping","params":{}}
 while time.time() < deadline:
     try:
-        s = socket.create_connection(('127.0.0.1', port), timeout=0.2)
+        s = socket.create_connection(('127.0.0.1', port), timeout=0.3)
+        s.settimeout(0.3)
+        s.sendall((json.dumps(req) + "\n").encode('utf-8'))
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
         s.close()
-        sys.exit(0)
+        if b"\n" in buf:
+            resp = json.loads(buf.split(b"\n",1)[0].decode('utf-8','replace'))
+            if resp.get('result', {}).get('pong') is True:
+                sys.exit(0)
     except Exception:
-        time.sleep(0.1)
-print('server did not become ready in time', file=sys.stderr)
+        pass
+    time.sleep(0.1)
+print('server did not become ready in time (ping failed)', file=sys.stderr)
 sys.exit(1)
 PY
 }

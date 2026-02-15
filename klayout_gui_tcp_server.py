@@ -18,6 +18,8 @@ Refactor note:
 
 import json
 import os
+import getpass
+from datetime import datetime, timezone
 import pya
 
 # -----------------------------------------------------------------------------
@@ -4418,6 +4420,56 @@ def start_server(port=0):
 
 
 # -----------------------------------------------------------------------------
+# Registry helpers (MCP v0)
+# -----------------------------------------------------------------------------
+
+
+def _write_registry_entry(port):
+    """Append a registry entry after server starts listening.
+
+    Registry path: env KLAYOUT_SERVER_REGISTRY_PATH else ~/.klayout/klayout_server_registry.jsonl
+    Fields: ts_utc, user(getpass.getuser), pid(os.getpid), port, project_dir(os.getcwd)
+
+    Best-effort: never crash if it fails.
+    """
+    try:
+        registry_path = os.environ.get("KLAYOUT_SERVER_REGISTRY_PATH")
+        if registry_path is None:
+            home = os.path.expanduser("~")
+            registry_path = os.path.join(
+                home, ".klayout", "klayout_server_registry.jsonl"
+            )
+
+        # Ensure directory exists
+        registry_dir = os.path.dirname(registry_path)
+        if registry_dir and not os.path.exists(registry_dir):
+            try:
+                os.makedirs(registry_dir, exist_ok=True)
+            except Exception as e:
+                print(f"[klayout-gui-server] WARN: could not create registry dir: {e}")
+                return
+
+        # Build entry
+        entry = {
+            "ts_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "user": getpass.getuser(),
+            "pid": os.getpid(),
+            "port": int(port),
+            "project_dir": os.getcwd(),
+        }
+
+        # Append to registry
+        line = json.dumps(entry, separators=(",", ":")) + "\n"
+        with open(registry_path, "a", encoding="utf-8") as f:
+            f.write(line)
+
+        print(f"[klayout-gui-server] registry entry written: {registry_path}")
+    except Exception as e:
+        # Best-effort: never crash
+        print(f"[klayout-gui-server] WARN: could not write registry: {e}")
+
+
+# -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
 
@@ -4425,3 +4477,7 @@ def start_server(port=0):
 _env_port = int(os.environ.get("KLAYOUT_SERVER_PORT", "0"))
 PORT = start_server(_env_port)
 print("[klayout-gui-server] PORT=", PORT, flush=True)
+print("[klayout-gui-server] CWD=", os.getcwd(), flush=True)
+
+# Write registry entry (best-effort)
+_write_registry_entry(PORT)
