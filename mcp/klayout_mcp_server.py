@@ -46,6 +46,9 @@ def _ensure_dirs():
 
 _RPC_LOCK = threading.Lock()
 
+# Prefer sticking to the last known-good endpoint for stability.
+_LAST_GOOD_ENDPOINT: Optional[Tuple[str, int, Optional[Dict[str, Any]]]] = None
+
 
 # -----------------------------------------------------------------------------
 # Registry resolution
@@ -201,19 +204,45 @@ def _resolve_endpoint() -> Tuple[str, int, Optional[Dict[str, Any]]]:
 # -----------------------------------------------------------------------------
 
 
-def _jsonrpc_call(
+def _is_transport_error(exc: BaseException) -> bool:
+    """Return True if this looks like a transient transport-level error."""
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError, TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, OSError):
+        # Common transient socket errors
+        # 104: ECONNRESET, 32: EPIPE
+        if getattr(exc, "errno", None) in (104, 32):
+            return True
+    msg = str(exc).lower()
+    return any(
+        s in msg
+        for s in (
+            "connection reset by peer",
+            "broken pipe",
+            "timed out",
+        )
+    )
+
+def _transport_error_info(exc: BaseException) -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) is not None:
+        info["errno"] = exc.errno
+    return info
+
+
+def _jsonrpc_call_once(
     host: str, port: int, method: str, params: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], float]:
-    """Make a JSON-RPC call and return (result_or_error, duration_ms)."""
+    """Make one JSON-RPC call and return (resp, duration_ms)."""
     start_time = time.time()
-
     sock = socket.create_connection((host, port), timeout=30.0)
     try:
-        # Send request
         req = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         sock.sendall((json.dumps(req, separators=(",", ":")) + "\n").encode("utf-8"))
 
-        # Receive response
         sock.settimeout(30.0)
         response = b""
         while b"\n" not in response:
@@ -227,11 +256,67 @@ def _jsonrpc_call(
 
         line = response.split(b"\n", 1)[0]
         resp = json.loads(line.decode("utf-8"))
-
         duration_ms = (time.time() - start_time) * 1000
         return resp, duration_ms
     finally:
-        sock.close()
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _jsonrpc_call(
+    host: str,
+    port: int,
+    method: str,
+    params: Dict[str, Any],
+    *,
+    max_attempts: int = 3,
+    retry_delays_ms: Optional[List[int]] = None,
+) -> Tuple[Dict[str, Any], float, Dict[str, Any]]:
+    """Make a JSON-RPC call with retry.
+
+    Returns: (resp, duration_ms_total, meta)
+    meta includes: attempts, retry_count, retry_delays_ms, transport_error (if any)
+    """
+    if retry_delays_ms is None:
+        retry_delays_ms = [100, 500, 1000]
+
+    attempts = 0
+    retry_count = 0
+    delays_used: List[int] = []
+    last_exc: Optional[BaseException] = None
+
+    start_total = time.time()
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            resp, _dur = _jsonrpc_call_once(host, port, method, params)
+            duration_ms_total = (time.time() - start_total) * 1000
+            meta = {
+                "attempts": attempts,
+                "retry_count": retry_count,
+                "retry_delays_ms": delays_used,
+            }
+            return resp, duration_ms_total, meta
+        except Exception as e:
+            last_exc = e
+            if not _is_transport_error(e) or attempts >= max_attempts:
+                break
+            # retry
+            delay = retry_delays_ms[min(retry_count, len(retry_delays_ms) - 1)]
+            delays_used.append(delay)
+            retry_count += 1
+            time.sleep(delay / 1000.0)
+
+    duration_ms_total = (time.time() - start_total) * 1000
+    meta = {
+        "attempts": attempts,
+        "retry_count": retry_count,
+        "retry_delays_ms": delays_used,
+        "transport_error": _transport_error_info(last_exc) if last_exc else None,
+    }
+    raise RuntimeError(str(last_exc) if last_exc else "RPC call failed")
 
 
 # -----------------------------------------------------------------------------
@@ -239,16 +324,50 @@ def _jsonrpc_call(
 # -----------------------------------------------------------------------------
 
 _trace_file_path: Optional[Path] = None
+_transport_errors_path: Optional[Path] = None
 
 
 def _init_trace_file():
-    """Initialize trace file for this run."""
-    global _trace_file_path
+    """Initialize trace files for this run."""
+    global _trace_file_path, _transport_errors_path
     _ensure_dirs()
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     shortid = os.urandom(4).hex()
-    _trace_file_path = TRACES_DIR / f"run_{ts}_{shortid}.jsonl"
+    run_id = f"run_{ts}_{shortid}"
+    _trace_file_path = TRACES_DIR / f"{run_id}.jsonl"
+    _transport_errors_path = TRACES_DIR / "transport_errors.jsonl"
+
+
+def _write_transport_event(
+    *,
+    tool: str,
+    endpoint: str,
+    rpc_method: str,
+    transport_error: Dict[str, Any],
+    attempts: int,
+    retry_count: int,
+    retry_delays_ms: List[int],
+):
+    """Append a compact transport error event for frequency tracking."""
+    if _transport_errors_path is None:
+        _init_trace_file()
+    entry = {
+        "ts_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "run_id": _trace_file_path.stem if _trace_file_path else None,
+        "tool": tool,
+        "rpc_method": rpc_method,
+        "endpoint": endpoint,
+        "transport_error": transport_error,
+        "attempts": attempts,
+        "retry_count": retry_count,
+        "retry_delays_ms": retry_delays_ms,
+    }
+    try:
+        with open(_transport_errors_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    except Exception as e:
+        print(f"[MCP] WARN: could not write transport error event: {e}")
 
 
 def _write_trace(
@@ -261,6 +380,12 @@ def _write_trace(
     rpc_response: Dict,
     duration_ms: float,
     artifacts: List[Dict],
+    *,
+    ok: bool,
+    attempts: int = 1,
+    retry_count: int = 0,
+    retry_delays_ms: Optional[List[int]] = None,
+    transport_error: Optional[Dict[str, Any]] = None,
 ):
     """Write a trace entry."""
     if _trace_file_path is None:
@@ -273,6 +398,11 @@ def _write_trace(
         "endpoint": endpoint,
         "project_dir_realpath": os.path.realpath(project_dir),
         "registry_match": registry_match,
+        "ok": ok,
+        "attempts": attempts,
+        "retry_count": retry_count,
+        "retry_delays_ms": retry_delays_ms or [],
+        "transport_error": transport_error,
         "mcp_params": mcp_params,
         "rpc_request": rpc_request,
         "rpc_response": rpc_response,
@@ -306,9 +436,21 @@ def _call_tool(
     path_ext: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generic tool caller with trace recording."""
+    global _LAST_GOOD_ENDPOINT
+
     with _RPC_LOCK:
-        # Resolve endpoint
-        host, port, registry_match = _resolve_endpoint()
+        # Resolve endpoint (prefer last known-good to avoid mid-session flakiness)
+        host = port = None
+        registry_match = None
+
+        if _LAST_GOOD_ENDPOINT is not None:
+            _h, _p, _m = _LAST_GOOD_ENDPOINT
+            if _ping_endpoint(_h, _p):
+                host, port, registry_match = _h, _p, _m
+
+        if host is None or port is None:
+            host, port, registry_match = _resolve_endpoint()
+
         endpoint = f"{host}:{port}"
 
         # Auto-generate path if needed
@@ -324,11 +466,14 @@ def _call_tool(
         # Build RPC params (copy to avoid modifying original)
         rpc_params = dict(mcp_params)
 
-        # Make RPC call
+        # Make RPC call (with retry + transport error logging)
+        meta: Dict[str, Any] = {"attempts": 1, "retry_count": 0, "retry_delays_ms": []}
+        transport_error = None
         try:
-            resp, duration_ms = _jsonrpc_call(host, port, rpc_method, rpc_params)
+            resp, duration_ms, meta = _jsonrpc_call(host, port, rpc_method, rpc_params)
         except Exception as e:
             duration_ms = 0
+            transport_error = _transport_error_info(e)
             resp = {
                 "error": {
                     "code": -32099,
@@ -347,6 +492,19 @@ def _call_tool(
 
         # Write trace
         project_dir = os.environ.get("KLAYOUT_PROJECT_DIR", os.getcwd())
+        ok = "error" not in resp
+        te = transport_error or meta.get("transport_error")
+        if te:
+            _write_transport_event(
+                tool=tool_name,
+                endpoint=endpoint,
+                rpc_method=rpc_method,
+                transport_error=te,
+                attempts=int(meta.get("attempts", 1)),
+                retry_count=int(meta.get("retry_count", 0)),
+                retry_delays_ms=meta.get("retry_delays_ms", []),
+            )
+
         _write_trace(
             tool=tool_name,
             endpoint=endpoint,
@@ -357,6 +515,11 @@ def _call_tool(
             rpc_response=resp,
             duration_ms=duration_ms,
             artifacts=artifacts,
+            ok=ok,
+            attempts=int(meta.get("attempts", 1)),
+            retry_count=int(meta.get("retry_count", 0)),
+            retry_delays_ms=meta.get("retry_delays_ms", []),
+            transport_error=te,
         )
 
         # Build response envelope
@@ -364,6 +527,10 @@ def _call_tool(
         error = resp.get("error")
 
         if error:
+            # If this looks like a transport error, invalidate cached endpoint.
+            if te is not None and _LAST_GOOD_ENDPOINT is not None:
+                _LAST_GOOD_ENDPOINT = None
+
             # Check for specific error types
             error_type = error.get("data", {}).get("type", "")
             suggestion = ""
@@ -377,6 +544,9 @@ def _call_tool(
                 "error": error,
                 "suggestion": suggestion,
             }
+
+        # Cache last known-good endpoint
+        _LAST_GOOD_ENDPOINT = (host, port, registry_match)
 
         return {
             "ok": True,
