@@ -64,10 +64,22 @@ def _get_registry_path() -> str:
 
 
 def _read_registry_entries(registry_path: str) -> List[Dict[str, Any]]:
-    """Read registry entries, skipping malformed lines."""
-    entries = []
+    """Read registry entries, skipping malformed lines.
+
+    Notes:
+    - Registry is JSONL written by the KLayout JSON-RPC macro server.
+    - We coerce numeric fields (pid/port) to int for robustness.
+    """
+    entries: List[Dict[str, Any]] = []
     if not os.path.exists(registry_path):
         return entries
+
+    def _as_int(v: Any) -> Optional[int]:
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str) and v.isdigit():
+            return int(v)
+        return None
 
     try:
         with open(registry_path, "r", encoding="utf-8") as f:
@@ -77,12 +89,22 @@ def _read_registry_entries(registry_path: str) -> List[Dict[str, Any]]:
                     continue
                 try:
                     entry = json.loads(line)
+
                     # Validate required fields
-                    if all(
+                    if not all(
                         k in entry
                         for k in ("ts_utc", "user", "pid", "port", "project_dir")
                     ):
-                        entries.append(entry)
+                        continue
+
+                    pid_i = _as_int(entry.get("pid"))
+                    port_i = _as_int(entry.get("port"))
+                    if pid_i is None or port_i is None:
+                        continue
+
+                    entry["pid"] = pid_i
+                    entry["port"] = port_i
+                    entries.append(entry)
                 except json.JSONDecodeError:
                     continue
     except Exception as e:
