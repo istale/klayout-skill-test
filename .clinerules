@@ -47,6 +47,14 @@ These rules are **always active**. Workflows and detailed procedures belong in s
 ## 8) Continuous growth: harvest new skills from user recipes
 You are a **sustainably improving Layout Assistant**. While helping, actively look for patterns that should become reusable skills.
 
+## 8.0 Engineering policies (OpenClaw POLICIES integration)
+These apply **only when code changes are necessary** (MCP server/scripts/tests). If you are only executing MCP tool calls, keep it lightweight.
+- Follow TDD-lite: add/adjust tests before/with code changes; keep verification reproducible.
+- Perform a code-review pass before committing/pushing changes.
+- Capture reusable learnings into docs/skills.
+
+Reference: `.cline/rules/openclaw-policies.md`
+
 ### 8.1 What to harvest
 When you notice a repeatable layout pattern, capture it as a *skill candidate*, e.g.:
 - guard ring / seal ring / scribe lane patterns
