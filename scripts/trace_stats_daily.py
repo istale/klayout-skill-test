@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily trace stats for KLayout MCP.
+"""Daily trace stats for KLayout tool traces.
 
 Usage:
   python3 scripts/trace_stats_daily.py [traces_dir]

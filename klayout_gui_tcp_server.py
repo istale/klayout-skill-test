@@ -4420,12 +4420,14 @@ def start_server(port=0):
 
 
 # -----------------------------------------------------------------------------
-# Registry helpers (MCP v0)
+# Registry helpers (dynamic port discovery)
 # -----------------------------------------------------------------------------
 
 
 def _write_registry_entry(port):
     """Append a registry entry after server starts listening.
+
+    用途：讓外部工具（或腳本）能以「註冊檔」方式發現 KLayout server 的動態 port。
 
     Registry path: env KLAYOUT_SERVER_REGISTRY_PATH else ~/.klayout/klayout_server_registry.jsonl
     Fields: ts_utc, user(getpass.getuser), pid(os.getpid), port, project_dir(os.getcwd)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hourly trace stats for KLayout MCP.
+"""Hourly trace stats for KLayout tool traces.
 
 Usage:
   python3 scripts/trace_stats_hourly.py [traces_dir]

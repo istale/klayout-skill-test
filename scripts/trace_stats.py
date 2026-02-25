@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trace stats for KLayout MCP.
+"""Trace stats for KLayout tool traces.
 
 Usage:
   python3 scripts/trace_stats.py [traces_dir]
@@ -77,7 +77,7 @@ def main(argv: list[str]) -> int:
     def pct(x: int, d: int) -> str:
         return f"{(100.0 * x / d):.2f}%" if d else "0%"
 
-    print("== MCP Trace Stats ==")
+    print("== Trace Stats ==")
     print(f"trace_files: {len(files)}")
     print(f"total_calls: {total}")
     print(f"ok: {ok} ({pct(ok, total)})")

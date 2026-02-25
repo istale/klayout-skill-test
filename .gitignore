@@ -16,8 +16,11 @@ klayout-python-offline-skill.tar.gz
 # Local scratch
 tmp_*.txt
 
-# MCP runtime outputs (traces and artifacts)
+# MCP/runtime tool outputs (traces and artifacts)
 /traces/
 /artifacts/
 /test_*.gds
 /test_*.png
+
+# Local backups
+/mcp_backup_*.tar.gz
