@@ -11,10 +11,10 @@ description: Control KLayout with Python (pya) and our JSON-RPC/TCP GUI server m
 
 ## 0) 最重要的入口（不要猜）
 - Server 程式：`klayout_gui_tcp_server.py`
-- API 規格：`docs/API.md`
+- API 規格：`references/API.md`
 - 測試入口：`./run_all_tests.sh`
 
-> 任何行為不確定：以 `docs/API.md` + 測試檔 `test_client_jsonrpc_*.py` 為準。
+> 任何行為不確定：以 `references/API.md` + 測試檔 `test_client_jsonrpc_*.py` 為準。
 
 ## 1) 啟動 server（推薦指令）
 
@@ -74,7 +74,7 @@ description: Control KLayout with Python (pya) and our JSON-RPC/TCP GUI server m
 - 只允許 server 啟動 cwd 底下的相對路徑
 - 不能用 `..` 跳脫
 
-（實際錯誤型別看 `docs/API.md` 的 errors 與測試。）
+（實際錯誤型別看 `references/API.md` 的 errors 與測試。）
 
 ## 5) 錯誤格式（client 解析要點）
 - 走 JSON-RPC 2.0 `error`
@@ -83,14 +83,18 @@ description: Control KLayout with Python (pya) and our JSON-RPC/TCP GUI server m
 
 ## 6) 離線文件（pya / KLayout API 查詢）
 這份 skill 仍保留離線文件鏡像：
-- `references/docs_md/`（優先，用 markdown 可 grep）
+- `references/API.md`（KLayout TCP server API 規格）
+- `references/docs_md/`（優先，用 markdown 可 grep；KLayout 官方 pya 文件）
 - `references/docs_html/`（原始鏡像）
 
-起點：`references/docs_md/INDEX.md`
+起點：`references/API.md`（KLayout TCP server API）或 `references/docs_md/INDEX.md`（pya 官方文件）
 
 查 API 的做法：
 ```bash
-# from repo root
+# from repo root (KLayout TCP server API)
+rg -n "layout.new" klayout-python/references/API.md
+
+# from repo root (KLayout pya 官方 API)
 rg -n "class_LayoutView" klayout-python/references/docs_md | head
 rg -n "begin_shapes_rec" klayout-python/references/docs_md | head
 ```

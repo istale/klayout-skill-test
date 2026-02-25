@@ -46,7 +46,7 @@ Transport:
 - One JSON-RPC response per line
 
 Docs:
-- API 規格：`docs/API.md`
+- API 規格：`klayout-python/references/API.md`
 - 執行模式：`docs/EXECUTION_MODES.md`
 - GUI 模型：`docs/GUI_MODEL.md`
 - 術語表：`docs/GLOSSARY.md`

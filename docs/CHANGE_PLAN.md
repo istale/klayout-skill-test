@@ -14,7 +14,7 @@
 - **目前尚未 release 給任何外部 client。**
 - 因此本計劃允許在短期內做 **breaking change**（以「規格一致性/可預期性」為優先），
   但仍需：
-  - 在 `docs/API.md` 明確寫出規格
+  - 在 `references/API.md` 明確寫出規格
   - 用測試固定住行為（避免未來真的 release 時自己打臉）
 
 ---
@@ -24,7 +24,7 @@
 - Repo：`/home/istale/.openclaw/workspace/klayout_skill_test`
 - Server：`klayout_gui_tcp_server.py`（JSON-RPC/TCP）
 - 測試入口：`./run_all_tests.sh`
-- API 文件：`docs/API.md`
+- API 文件：`references/API.md`
 
 ### 名詞（避免漂移）
 - 「單位」：`unit`（方法參數，用於回傳座標單位，例如 `um` 或 `dbu`）
@@ -36,7 +36,7 @@
 ## 1. 統一 JSON-RPC error.data schema（文件 ↔ 實作一致）
 
 ### As-Is（現行行為）
-- `docs/API.md`（errors 範例）描述 error.data 形式偏向：
+- `references/API.md`（errors 範例）描述 error.data 形式偏向：
   - `data: { type: <string>, details: <object> }`
 - 但 server 實作 `_err()`/`_err_std()` 可能會把欄位「直接平鋪」在 `data` 內，而不是包在 `details`。
 
@@ -56,7 +56,7 @@
 2. 修改 helper：
    - 若 caller 傳的是 dict，就包進 `details`。
    - 既有平鋪欄位改移到 `details`。
-3. 更新 `docs/API.md`：
+3. 更新 `references/API.md`：
    - 統一範例
    - 列出「error.data.type / error.data.details」為正式 API。
 
@@ -87,7 +87,7 @@
 ### 實作步驟
 1. 在 server 集中定義 mapping（例如常數 dict）。
 2. 全面替換 call site，或讓 `_err_std(type=...)` 自動套用 code。
-3. 更新 `docs/API.md` errors section。
+3. 更新 `references/API.md` errors section。
 
 ### 測試驗證
 - 測試觸發 `CellNotFound` 於多個 method，assert code 一致。
@@ -115,7 +115,7 @@
 ### 實作步驟
 1. 抽象成單一 `_resolve_output_path(kind, path, default_ext)`。
 2. export/open/screenshot/render 改用同一 resolver。
-3. `docs/API.md` 補上 `InvalidPath`（若保留）。
+3. `references/API.md` 補上 `InvalidPath`（若保留）。
 
 ### 測試驗證
 - 建立測試：
@@ -263,7 +263,7 @@
 ## M1. 參數命名一致化（unit vs units）
 - 統一欄位名或增加 alias 支援，並更新 docs。
 
-## M2. docs/API.md Methods Index 補齊
+## M2. references/API.md Methods Index 補齊
 - Index 加上 `hier.shapes_rec_boxes`。
 
 ## M3. hierarchy_path 語意文件化 + 測試強化
