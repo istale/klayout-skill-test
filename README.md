@@ -5,7 +5,12 @@ Validate that a **KLayout Python macro** can host a **TCP server** (localhost on
 
 ## Files
 - `klayout_gui_tcp_server.py`: KLayout macro. Starts a TCP server on 127.0.0.1. By default it uses an OS-assigned port; you can also force a port via env `KLAYOUT_SERVER_PORT`.
-- `test_client_ping.py`: external client test. Sends `ping\n`, expects `pong\n`.
+- `tests/test_client_ping.py`: external client smoke test. Sends `ping\n`, expects `pong\n`.
+
+## Repo hygiene（給 code agent / 後續接手者）
+- `backups/`：僅為歷史備份/暫存。
+  - **code agent 不需要、也不應該讀取**這裡的內容來理解需求或決定行為（以 `klayout-python/references/API.md` + `tests/` 為準）。
+- `artifacts/` 已移出本專案，集中到 workspace 的：`/home/istale/.openclaw/workspace/klayout_api_html/`。
 
 ## Run (GUI)
 1) Open KLayout GUI (executable: `/home/istale/klayout-build/0.30.5-qt5/klayout`)
@@ -15,7 +20,7 @@ Validate that a **KLayout Python macro** can host a **TCP server** (localhost on
 4) From a terminal:
 
 ```bash
-python3 /home/istale/.openclaw/workspace/klayout_skill_test/test_client_ping.py <port>
+python3 /home/istale/.openclaw/workspace/klayout-skill-test/tests/test_client_ping.py <port>
 ```
 
 Expect `OK`.
@@ -31,13 +36,13 @@ Prereq (dynamic linker):
 
 Terminal A:
 ```bash
-cd /home/istale/.openclaw/workspace/klayout_skill_test
+cd /home/istale/.openclaw/workspace/klayout-skill-test
 KLAYOUT_SERVER_PORT=5055 /home/istale/klayout-build/0.30.5-qt5/klayout -e -rm klayout_gui_tcp_server.py
 ```
 
 Terminal B:
 ```bash
-python3 /home/istale/.openclaw/workspace/klayout_skill_test/test_client_ping.py 5055
+python3 /home/istale/.openclaw/workspace/klayout-skill-test/tests/test_client_ping.py 5055
 ```
 
 ## Protocol (JSON-RPC 2.0)

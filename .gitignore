@@ -22,5 +22,5 @@ tmp_*.txt
 /test_*.gds
 /test_*.png
 
-# Local backups
-/mcp_backup_*.tar.gz
+# Local backups (not part of normal dev / agent workflow)
+/backups/
