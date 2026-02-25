@@ -21,6 +21,3 @@ tmp_*.txt
 /artifacts/
 /test_*.gds
 /test_*.png
-
-# Local backups (not part of normal dev / agent workflow)
-/backups/
